@@ -1,0 +1,20 @@
+{
+  "name": "cli-poker",
+  "version": "1.0.0",
+  "description": "A dependency-free Node.js Texas Hold'em CLI game",
+  "main": "src/index.js",
+  "bin": {
+    "cli-poker": "src/index.js"
+  },
+  "engines": {
+    "node": ">=26.10.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {}
+}
