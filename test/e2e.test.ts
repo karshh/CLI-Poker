@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -8,8 +8,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const CLI_PATH = resolve(__dirname, '../src/index.js');
 
+const INTERACTIVE_PROMPT_PATTERN =
+  /(?:^|\n)(Choose a difficulty \(easy, medium, hard\): |Your action \(check, bet \$\d+, fold\): |Your response \(call \$\d+, fold\): |Play another hand\? \(yes\/no\): )$/;
+
+export function matchInteractivePrompt(output: string): string | undefined {
+  const match = INTERACTIVE_PROMPT_PATTERN.exec(output);
+  return match?.[1];
+}
+
 interface RunInteractiveSessionOptions {
   readonly onPrompt: (promptText: string, fullOutput: string) => string | null | undefined;
+  readonly randomValues?: readonly number[];
+  readonly fragmentAtColonSpace?: boolean;
   readonly timeoutMs?: number;
 }
 
@@ -19,12 +29,27 @@ interface RunInteractiveResult {
   readonly stderr: string;
 }
 
+function buildSpawnArgs(randomValues?: readonly number[]): readonly string[] {
+  if (!randomValues || randomValues.length === 0) {
+    return [CLI_PATH];
+  }
+  const preloadScript = [
+    `const values = ${JSON.stringify(randomValues)};`,
+    'let index = 0;',
+    'Math.random = () => values[index++ % values.length] ?? 0;',
+    `await import(${JSON.stringify(pathToFileURL(CLI_PATH).href)});`,
+  ].join(' ');
+  return ['--input-type=module', '-e', preloadScript];
+}
+
 function runInteractiveSession({
   onPrompt,
+  randomValues,
+  fragmentAtColonSpace = false,
   timeoutMs = 5000,
 }: RunInteractiveSessionOptions): Promise<RunInteractiveResult> {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(process.execPath, [CLI_PATH], {
+    const child = spawn(process.execPath, buildSpawnArgs(randomValues), {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -44,14 +69,12 @@ function runInteractiveSession({
       settled = true;
     };
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+    const processPiece = (piece: string): void => {
+      stdout += piece;
       if (settled) return;
 
-      // Match interactive prompt text ending with ": " (without a trailing newline)
-      const match = /(?:^|\n)([^\n]+: )$/.exec(stdout);
-      if (match && stdout.length > lastPromptOffset) {
-        const promptText = match[1] ?? '';
+      const promptText = matchInteractivePrompt(stdout);
+      if (promptText !== undefined && stdout.length > lastPromptOffset) {
         lastPromptOffset = stdout.length;
         const answer = onPrompt(promptText, stdout);
         if (answer === null) {
@@ -59,6 +82,14 @@ function runInteractiveSession({
         } else if (answer !== undefined) {
           child.stdin.write(`${answer}\n`);
         }
+      }
+    };
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      const pieces = fragmentAtColonSpace ? text.split(/(?<=: )/g) : [text];
+      for (const piece of pieces) {
+        processPiece(piece);
       }
     });
 
@@ -80,7 +111,11 @@ function runInteractiveSession({
 
 function runScriptedSession(
   inputs: readonly string[],
-  timeoutMs = 5000,
+  options?: {
+    readonly randomValues?: readonly number[];
+    readonly fragmentAtColonSpace?: boolean;
+    readonly timeoutMs?: number;
+  },
 ): Promise<RunInteractiveResult> {
   let index = 0;
   return runInteractiveSession({
@@ -92,9 +127,28 @@ function runScriptedSession(
       }
       return undefined;
     },
-    timeoutMs,
+    ...(options?.randomValues !== undefined ? { randomValues: options.randomValues } : {}),
+    ...(options?.fragmentAtColonSpace !== undefined
+      ? { fragmentAtColonSpace: options.fragmentAtColonSpace }
+      : {}),
+    ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
 }
+
+test('e2e: splitting non-prompt output at ": " does not prematurely consume scripted inputs', async () => {
+  const { exitCode, stdout, stderr } = await runScriptedSession(['easy', 'fold', 'no'], {
+    fragmentAtColonSpace: true,
+  });
+
+  assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
+  assert.match(stdout, /Your cards: \S+\s+\S+/);
+  assert.match(stdout, /You folded; the machine wins the pot\./);
+  assert.match(stdout, /Machine cards: \S+\s+\S+/);
+  assert.match(stdout, /Completed board: (?:\S+\s+){4}\S+/);
+  assert.match(stdout, /Lesson: use this only to review the result/);
+  assert.match(stdout, /Thanks for playing!/);
+  assert.equal(stderr, '');
+});
 
 test('e2e: immediate fold on pre-flop exits cleanly after one hand', async () => {
   const { exitCode, stdout, stderr } = await runScriptedSession(['easy', 'fold', 'no']);
@@ -161,6 +215,7 @@ test('e2e: play multiple consecutive hands using yes and y before quitting', asy
 
 test('e2e: all four streets and bet sizes ($10, $20, $30, $40) are experienced through showdown', async () => {
   const { exitCode, stdout, stderr } = await runInteractiveSession({
+    randomValues: [0.9],
     onPrompt: (promptText) => {
       if (promptText.includes('Choose a difficulty')) return 'hard';
       if (promptText.includes('Your action (check, bet $')) return 'check';
@@ -190,6 +245,7 @@ test('e2e: all four streets and bet sizes ($10, $20, $30, $40) are experienced t
 
 test('e2e: folding on turn after flop reveals full 5-card board in hindsight', async () => {
   const { exitCode, stdout, stderr } = await runInteractiveSession({
+    randomValues: [0.9],
     onPrompt: (promptText) => {
       if (promptText.includes('Choose a difficulty')) return 'medium';
       if (promptText.includes('Your action (check, bet $10')) return 'check';
@@ -212,62 +268,50 @@ test('e2e: folding on turn after flop reveals full 5-card board in hindsight', a
 });
 
 test('e2e: facing a machine bet validates invalid response and supports folding to a bet', async () => {
-  let sentInvalidResponse = false;
-  let foldedToBet = false;
-  let handsPlayed = 0;
-
-  const { exitCode, stdout, stderr } = await runInteractiveSession({
-    onPrompt: (promptText) => {
-      if (promptText.includes('Choose a difficulty')) return 'easy';
-      if (promptText.includes('Your action (check, bet $')) return 'check';
-      if (promptText.includes('Your response (call $')) {
-        if (!sentInvalidResponse) {
-          sentInvalidResponse = true;
-          return 'raise';
-        }
-        foldedToBet = true;
-        return 'fold';
-      }
-      if (promptText.includes('Play another hand?')) {
-        handsPlayed += 1;
-        if (!foldedToBet && handsPlayed < 15) return 'y';
-        return 'no';
-      }
-      return undefined;
-    },
-  });
+  // In easy mode with facingBet=false, roll < 0.45 causes the machine to bet deterministically on Pre-flop.
+  const { exitCode, stdout, stderr } = await runScriptedSession(
+    ['easy', 'check', 'raise', 'fold', 'no'],
+    { randomValues: [0.1] },
+  );
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
-  assert.ok(foldedToBet, 'Expected machine to bet at least once across hands in easy mode');
-  assert.match(stdout, /The machine bets \$\d+\./);
+  assert.match(stdout, /The machine bets \$10\./);
+  assert.match(stdout, /Your response \(call \$10, fold\): /);
   assert.match(stdout, /Please enter one of: call, fold\./);
   assert.match(stdout, /You folded; the machine wins the pot\./);
   assert.match(stdout, /Thanks for playing!/);
   assert.equal(stderr, '');
 });
 
-test('e2e: aggressive betting sequence handles opponent calls, folds, and showdown', async () => {
-  let handsPlayed = 0;
-  const { exitCode, stdout, stderr } = await runInteractiveSession({
-    onPrompt: (promptText, fullOutput) => {
-      if (promptText.includes('Choose a difficulty')) return 'easy';
-      if (promptText.includes('Your action (check, bet $')) return 'bet';
-      if (promptText.includes('Your response (call $')) return 'call';
-      if (promptText.includes('Play another hand?')) {
-        handsPlayed += 1;
-        const sawFold = fullOutput.includes('The machine folds. You win the hand.');
-        const sawCall = fullOutput.includes('The machine calls $');
-        if ((!sawFold || !sawCall) && handsPlayed < 15) return 'y';
-        return 'no';
-      }
-      return undefined;
-    },
-  });
+test('e2e: aggressive betting reaches showdown when opponent calls every street', async () => {
+  // In easy mode with facingBet=true, roll >= 0.25 causes the machine to call deterministically on every street.
+  const { exitCode, stdout, stderr } = await runScriptedSession(
+    ['easy', 'bet', 'bet', 'bet', 'bet', 'no'],
+    { randomValues: [0.8] },
+  );
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
   assert.match(stdout, /Playing on EASY mode\./);
-  assert.match(stdout, /The machine calls \$\d+\./);
+  assert.match(stdout, /The machine calls \$10\./);
+  assert.match(stdout, /The machine calls \$20\./);
+  assert.match(stdout, /The machine calls \$30\./);
+  assert.match(stdout, /The machine calls \$40\./);
+  assert.match(stdout, /Showdown/);
+  assert.match(stdout, /Thanks for playing!/);
+  assert.equal(stderr, '');
+});
+
+test('e2e: aggressive betting wins immediately when opponent folds', async () => {
+  // In easy mode with facingBet=true, roll < 0.25 causes the machine to fold deterministically on Pre-flop.
+  const { exitCode, stdout, stderr } = await runScriptedSession(
+    ['easy', 'bet', 'no'],
+    { randomValues: [0.1] },
+  );
+
+  assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
+  assert.match(stdout, /Playing on EASY mode\./);
   assert.match(stdout, /The machine folds\. You win the hand\./);
+  assert.doesNotMatch(stdout, /Flop — board:/);
   assert.match(stdout, /Thanks for playing!/);
   assert.equal(stderr, '');
 });
