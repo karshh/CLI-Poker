@@ -27,6 +27,7 @@ interface RunInteractiveResult {
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  readonly prompts: readonly string[];
 }
 
 function buildSpawnArgs(randomValues?: readonly number[]): readonly string[] {
@@ -57,6 +58,7 @@ function runInteractiveSession({
     let stderr = '';
     let settled = false;
     let lastPromptOffset = -1;
+    const prompts: string[] = [];
 
     const timer = setTimeout(() => {
       settled = true;
@@ -76,6 +78,7 @@ function runInteractiveSession({
       const promptText = matchInteractivePrompt(stdout);
       if (promptText !== undefined && stdout.length > lastPromptOffset) {
         lastPromptOffset = stdout.length;
+        prompts.push(promptText);
         const answer = onPrompt(promptText, stdout);
         if (answer === null) {
           child.stdin.end();
@@ -99,7 +102,7 @@ function runInteractiveSession({
 
     child.on('close', (exitCode) => {
       cleanup();
-      resolveResult({ exitCode, stdout, stderr });
+      resolveResult({ exitCode, stdout, stderr, prompts });
     });
 
     child.on('error', (err) => {
@@ -136,11 +139,28 @@ function runScriptedSession(
 }
 
 test('e2e: splitting non-prompt output at ": " does not prematurely consume scripted inputs', async () => {
-  const { exitCode, stdout, stderr } = await runScriptedSession(['easy', 'fold', 'no'], {
+  for (const nonPromptPrefix of [
+    'Your cards: ',
+    'Opponent difficulty: ',
+    'Machine cards: ',
+    'Completed board: ',
+    'Board: ',
+    'Lesson: ',
+    'Flop — board: ',
+  ]) {
+    assert.equal(matchInteractivePrompt(nonPromptPrefix), undefined);
+  }
+
+  const { exitCode, stdout, stderr, prompts } = await runScriptedSession(['easy', 'fold', 'no'], {
     fragmentAtColonSpace: true,
   });
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
+  assert.deepEqual(prompts, [
+    'Choose a difficulty (easy, medium, hard): ',
+    'Your action (check, bet $10, fold): ',
+    'Play another hand? (yes/no): ',
+  ]);
   assert.match(stdout, /Your cards: \S+\s+\S+/);
   assert.match(stdout, /You folded; the machine wins the pot\./);
   assert.match(stdout, /Machine cards: \S+\s+\S+/);
