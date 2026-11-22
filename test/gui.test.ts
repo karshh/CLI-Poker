@@ -570,6 +570,42 @@ test('PokerGameEngine reports main- and side-pot awards separately and emits mix
   ]);
   assert.match(mixed.outcome?.message ?? '', /Mixed result \(you won \$30\): Main pot \(\$75\): Lord Reginald; Side pot \(\$30\): You/);
   assert.match(mixed.dealerSpeech, /Main pot \(\$75\): Lord Reginald; Side pot \(\$30\): You/);
+  const mixedLog = mixed.narrative[mixed.narrative.length - 1]?.text ?? '';
+  assert.equal(mixedLog.match(/Lord Reginald:/g)?.length, 1, 'Opponent rank list must appear once in side-pot-win log');
+
+  // C. Short-stack Player ($5) wins $25 main pot while Reginald wins $80 side pot -> rank list appears ONCE in log:
+  const shortPlayerDeck = () => {
+    const cards = [
+      new Card('♠', 'A'), new Card('♥', 'A'), // Player ($5 all-in -> wins $25 main pot)
+      new Card('♠', 'K'), new Card('♥', 'K'), // Seat 1: Reginald ($500 -> wins side pot)
+      new Card('♣', '7'), new Card('♦', '8'), // Seat 2: Buck ($500)
+      new Card('♥', '7'), new Card('♠', '8'), // Seat 3: Elon ($500)
+      new Card('♠', 'Q'), new Card('♥', 'Q'), // Seat 4: Tony ($500)
+      new Card('♣', '2'), new Card('♦', '4'), new Card('♠', '6'),
+      new Card('♣', '9'),
+      new Card('♥', 'J'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+  const shortPlayerEngine = new PokerGameEngine({
+    initialPlayerChips: 5,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+    deckFactory: shortPlayerDeck,
+  });
+  shortPlayerEngine.act('select_opponents:reginald,buck,elon,tony');
+  shortPlayerEngine.act('easy');
+  const mainOnlyMixed = shortPlayerEngine.act('call'); // Player calls $5 all-in -> opponents build side pot -> Showdown
+  assert.equal(mainOnlyMixed.outcome?.result, 'mixed');
+  assert.equal(mainOnlyMixed.outcome?.playerPayout, 25);
+  const mainMixedLog = mainOnlyMixed.narrative[mainOnlyMixed.narrative.length - 1]?.text ?? '';
+  assert.equal(
+    mainMixedLog.match(/Lord Reginald:/g)?.length,
+    1,
+    'Opponent rank list must appear once (not twice) when player wins main pot and opponent wins side pot',
+  );
+  assert.equal(mainOnlyMixed.dealerSpeech, mainMixedLog);
 });
 
 test('PokerGameEngine reveals folded opponents’ cards and reveals all players’ cards when player folds and hand ends', () => {

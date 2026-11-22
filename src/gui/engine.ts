@@ -1998,11 +1998,12 @@ export class PokerGameEngine {
       };
     } else if (playerWonAny && otherWonAny) {
       const mainWinnerNames = this.formatNameList((mainSlice?.winners ?? []).map((w) => w.name));
-      const explanation = !playerWonMain
+      const summary = !playerWonMain
         ? `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} in side pot(s) with ${playerRank.name}; ${mainWinnerNames} took the main pot (${bestOpp.rank.name}).`
-        : `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} total with ${playerRank.name}. (${oppBreakdown}).`;
+        : `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} total with ${playerRank.name}.`;
+      const explanation = `${summary} (${oppBreakdown}).`;
       this.dealerSpeech = explanation;
-      this.narrative.push({ speaker: 'Dealer', text: `${explanation} (${oppBreakdown}).` });
+      this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
         result: 'mixed',
         pot: this.pot,
