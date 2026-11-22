@@ -9,33 +9,7 @@
 <body>
   <!-- Ambient Casino Background Layer -->
   <div class="casino-room">
-    <!-- Ceiling & Chandelier -->
-    <div class="ceiling">
-      <div class="chandelier">
-        <div class="chandelier-fixture"></div>
-        <div class="chandelier-crystals"></div>
-        <div class="chandelier-light-cone"></div>
-      </div>
-    </div>
-
-    <!-- Wall Sconces & Wallpaper -->
-    <div class="wall-bg">
-      <div class="sconce left">
-        <div class="sconce-lamp"></div>
-        <div class="sconce-glow"></div>
-      </div>
-      <div class="sconce right">
-        <div class="sconce-lamp"></div>
-        <div class="sconce-glow"></div>
-      </div>
-      <div class="casino-painting">
-        <div class="painting-frame">
-          <div class="painting-inner">HIGH ROLLER SALON</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Top Status Bar -->
+    <!-- Top Status Bar (Strictly Above the Game Viewport) -->
     <header class="top-nav">
       <div class="brand">
         <span class="suit-icon red"><svg class="suit-icon-svg" viewBox="0 0 24 28" fill="currentColor" style="width:13px;height:15px;display:inline-block;vertical-align:middle;"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg></span>
@@ -50,6 +24,7 @@
           👥 Select Opponents
         </button>
         <div class="stat-pill" id="stat-hand-pill">Hand: <span id="stat-hand-count">1</span></div>
+        <div class="stat-pill" id="stat-position-pill">Pos: <strong id="stat-position">BTN</strong></div>
         <div class="stat-pill" id="stat-mode-pill">Difficulty: <span id="stat-difficulty">-</span></div>
         <button id="sound-toggle" class="icon-btn" title="Toggle Sound (M)">
           <span id="sound-icon">🔊</span>
@@ -57,8 +32,33 @@
       </div>
     </header>
 
-    <!-- 3D POV Casino Table Scene -->
+    <!-- 3D POV Casino Table Scene (Encapsulated Strictly Below Top Nav) -->
     <main class="pov-viewport">
+      <!-- Ceiling & Chandelier -->
+      <div class="ceiling">
+        <div class="chandelier">
+          <div class="chandelier-fixture"></div>
+          <div class="chandelier-crystals"></div>
+          <div class="chandelier-light-cone"></div>
+        </div>
+      </div>
+
+      <!-- Wall Sconces & Wallpaper -->
+      <div class="wall-bg">
+        <div class="sconce left">
+          <div class="sconce-lamp"></div>
+          <div class="sconce-glow"></div>
+        </div>
+        <div class="sconce right">
+          <div class="sconce-lamp"></div>
+          <div class="sconce-glow"></div>
+        </div>
+        <div class="casino-painting">
+          <div class="painting-frame">
+            <div class="painting-inner">HIGH ROLLER SALON</div>
+          </div>
+        </div>
+      </div>
       <!-- HIDABLE OPPONENT POTS & STACKS FLOATING WINDOW -->
       <aside class="pots-window open" id="pots-window" aria-label="Opponent Pots Tracker">
         <div class="pots-window-header">
@@ -107,8 +107,15 @@
 
           <!-- DEALER (Seated in Chair Behind Center Back of Table) -->
           <div class="character-container dealer-slot" id="dealer-container">
-            <div class="speech-bubble" id="dealer-speech-bubble">
-              <span class="speech-text" id="dealer-bubble-text">Welcome to the VIP table.</span>
+            <div class="seat-overhead-stack dealer-overhead-stack">
+              <div class="character-nameplate dealer-nameplate">
+                <span class="badge-role">DEALER</span> Vincent
+              </div>
+              <div class="speech-bubble-slot">
+                <div class="speech-bubble" id="dealer-speech-bubble">
+                  <span class="speech-text" id="dealer-bubble-text">Welcome to the VIP table.</span>
+                </div>
+              </div>
             </div>
             <div class="seated-character-wrapper">
               <!-- Casino Dealer High-Back Leather Chair -->
@@ -226,8 +233,10 @@
                     <span class="pot-label">POT</span>
                     <span class="pot-amount" id="pot-amount">$0</span>
                   </div>
-                  <div class="dealer-button" id="dealer-button" title="Dealer Button">D</div>
                 </div>
+
+                <!-- ROTATING DEALER BUTTON PUCK (Moves clockwise every hand to BTN seat) -->
+                <div class="dealer-button btn-at-player" id="dealer-button" title="Dealer Button (BTN)">D</div>
 
                 <!-- 5 COMMUNITY CARDS SLOTS -->
                 <div class="community-cards-container" id="community-cards-container">
@@ -245,21 +254,14 @@
             </div>
           </div>
 
-          <!-- NAMEPLATES PINNED CLEANLY ON MAHOGANY TABLE RAIL -->
-          <div class="character-nameplate dealer-nameplate">
-            <span class="badge-role">DEALER</span> Vincent
-          </div>
-
-          <div class="character-nameplate opp-nameplate nameplate-far-left" id="nameplate-slot-far-left"></div>
-          <div class="character-nameplate opp-nameplate nameplate-top-left" id="nameplate-slot-top-left"></div>
-          <div class="character-nameplate opp-nameplate nameplate-top-right" id="nameplate-slot-top-right"></div>
-          <div class="character-nameplate opp-nameplate nameplate-far-right" id="nameplate-slot-far-right"></div>
-
         </div><!-- /.table-scene -->
 
         <!-- PLAYER POV (Foreground: Cards in hand & Player Chips) -->
         <div class="player-pov-area">
           <div class="player-left-chips">
+            <div class="player-pos-row">
+              <span class="pos-badge pos-btn" id="player-position-badge" title="Dealer Button">BTN • Dealer Button</span>
+            </div>
             <div class="chip-count-tag player-chip-tag" id="player-chip-tag">Your Stack: $500</div>
             <div class="chips-stack-visual" id="player-chips-visual"></div>
           </div>

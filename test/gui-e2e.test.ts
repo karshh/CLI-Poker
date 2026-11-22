@@ -219,26 +219,35 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
     const startRes = await apiAct(baseUrl, 'medium');
     assert.equal(startRes.status, 200);
     const startState = startRes.body as unknown as SerializedGameState;
-    assert.equal(startState.stage, 'player_action');
+    assert.ok(startState.stage === 'player_action' || startState.stage === 'player_response');
+    assert.equal(startState.playerPosition, 'BTN');
+    assert.deepEqual(
+      startState.opponents.map((o) => o.position),
+      ['SB', 'BB', 'UTG', 'CO'],
+    );
     for (const opp of startState.opponents) {
-      assert.equal(opp.cardsHidden, true);
-      assert.equal(opp.cards[0]?.str, '??');
-      assert.equal(opp.speech, '');
+      if (opp.folded) {
+        assert.equal(opp.cardsHidden, false);
+        assert.notEqual(opp.cards[0]?.str, '??');
+      } else {
+        assert.equal(opp.cardsHidden, true);
+        assert.equal(opp.cards[0]?.str, '??');
+      }
     }
 
     // Mid-hand roster change is blocked with 400
     assert.equal((await apiAct(baseUrl, 'open_opponent_select')).status, 400);
     assert.equal((await apiAct(baseUrl, 'select_opponents:buck,bruce,viktor,meiling')).status, 400);
 
-    // 6. Fold keeps all opponent cards strictly masked and plays out multiway hand cleanly
+    // 6. Fold plays out multiway hand to a winner and reveals all players' cards!
     const foldRes = await apiAct(baseUrl, 'fold');
     assert.equal(foldRes.status, 200);
     const foldState = foldRes.body as unknown as SerializedGameState;
     assert.equal(foldState.stage, 'hand_over');
     assert.equal(foldState.playerFolded, true);
     for (const opp of foldState.opponents) {
-      assert.equal(opp.cardsHidden, true);
-      assert.equal(opp.cards[0]?.str, '??');
+      assert.equal(opp.cardsHidden, false);
+      assert.notEqual(opp.cards[0]?.str, '??');
     }
 
     // 7. Hand #2: play through to showdown and verify chip conservation & clean restart
@@ -262,11 +271,15 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
       for (const opp of state.opponents) {
         assert.ok(opp.chips >= 0);
       }
-      if (state.stage === 'player_action') {
+      if (state.stage === 'player_action' || state.stage === 'player_response') {
         for (const opp of state.opponents) {
-          assert.equal(opp.speech, '');
-          assert.equal(opp.cardsHidden, true);
-          assert.equal(opp.cards[0]?.str, '??');
+          if (opp.folded) {
+            assert.equal(opp.cardsHidden, false);
+            assert.notEqual(opp.cards[0]?.str, '??');
+          } else {
+            assert.equal(opp.cardsHidden, true);
+            assert.equal(opp.cards[0]?.str, '??');
+          }
         }
         const sumContrib =
           state.playerHandContribution + state.opponents.reduce((acc, o) => acc + o.handContribution, 0);
@@ -487,7 +500,7 @@ test(
 
             // Start hand on Easy -> Select Opponents button MUST be disabled during active hand to preserve pot
             await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
             assert.equal(await page.locator('#pick-opponents-btn').isDisabled(), true);
 
             // Fold to finish hand -> Select Opponents becomes enabled between hands, with working Cancel button
@@ -511,7 +524,7 @@ test(
             await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
             await confirmBtn.click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
             for (const id of ['reginald', 'bruce', 'viktor', 'meiling']) {
               const avatarBox = await page.locator(`#opp-avatar-${id}`).boundingBox();
@@ -523,44 +536,93 @@ test(
       });
 
       // ----------------------------------------------------------------------
-      // TEST 2: Dealer & All 4 Opponents Seated on Chairs BEHIND Table Rail
+      // TEST 2: Seating Layers, Game Viewport Below Nav, Overhead Name+Stack Cards & Bubble Placement
       // ----------------------------------------------------------------------
-      await t.test('dealer and all 4 opponents sit on chairs layered strictly behind the poker table rail (not hovering)', async () => {
+      await t.test('game viewport sits below top nav, seats stay behind table rail, name+stack cards sit above seats, and speech bubbles sit between card and seat without nav clipping', async () => {
         await withGamePage(
           async ({ page }) => {
             await page.locator('#btn-random-opponents').click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
             await page.locator('#action-buttons-group button', { hasText: 'Medium' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
-            const zLayers = await page.evaluate(() => {
+            const layout = await page.evaluate(() => {
               const z = (sel: string): number => {
                 const el = document.querySelector(sel);
                 return el ? parseInt(getComputedStyle(el).zIndex || '0', 10) : -999;
               };
+              const navRect = document.querySelector('.top-nav')!.getBoundingClientRect();
+              const vpRect = document.querySelector('.pov-viewport')!.getBoundingClientRect();
+              const tableRect = document.querySelector('.poker-table-surface')!.getBoundingClientRect();
+              const dealerPlate = document.querySelector('.dealer-nameplate')!.getBoundingClientRect();
+              const dealerBubble = document.getElementById('dealer-speech-bubble')!.getBoundingClientRect();
+              const dealerAvatar = document.getElementById('dealer-avatar')!.getBoundingClientRect();
+              const oppChecks = Array.from(document.querySelectorAll('.character-container[data-opp-id]')).map((seat) => {
+                const id = seat.getAttribute('data-opp-id') || '';
+                const plate = seat.querySelector('.character-nameplate')!.getBoundingClientRect();
+                const avatar = seat.querySelector('.opponent-avatar')!.getBoundingClientRect();
+                const bubbleEl = seat.querySelector('.opponent-bubble')!;
+                const bubbleActive = bubbleEl.classList.contains('active');
+                const bubble = bubbleEl.getBoundingClientRect();
+                return {
+                  id,
+                  plateTop: plate.top,
+                  plateBottom: plate.bottom,
+                  avatarTop: avatar.top,
+                  bubbleActive,
+                  bubbleTop: bubble.top,
+                  bubbleBottom: bubble.bottom,
+                };
+              });
               return {
+                navBottom: navRect.bottom,
+                vpTop: vpRect.top,
+                tableTop: tableRect.top,
+                dealerPlateTop: dealerPlate.top,
+                dealerPlateBottom: dealerPlate.bottom,
+                dealerBubbleTop: dealerBubble.top,
+                dealerBubbleBottom: dealerBubble.bottom,
+                dealerAvatarTop: dealerAvatar.top,
+                oppChecks,
                 table: z('.poker-table-surface'),
                 dealer: z('.dealer-slot'),
                 farLeft: z('.seat-far-left'),
                 topLeft: z('.seat-top-left'),
                 topRight: z('.seat-top-right'),
                 farRight: z('.seat-far-right'),
-                dealerNameplate: z('.dealer-nameplate'),
-                oppNameplate: z('.nameplate-top-right'),
                 chairCount: document.querySelectorAll('.casino-chair svg').length,
                 feltCardContainers: document.querySelectorAll('.table-felt .opp-table-items').length,
               };
             });
 
-            assert.ok(zLayers.table > zLayers.dealer);
-            assert.ok(zLayers.table > zLayers.farLeft);
-            assert.ok(zLayers.table > zLayers.topLeft);
-            assert.ok(zLayers.table > zLayers.topRight);
-            assert.ok(zLayers.table > zLayers.farRight);
-            assert.ok(zLayers.dealerNameplate > zLayers.table);
-            assert.ok(zLayers.oppNameplate > zLayers.table);
-            assert.equal(zLayers.chairCount, 5);
-            assert.equal(zLayers.feltCardContainers, 4);
+            // 1. Game viewport starts strictly below the top nav bar (never behind it!)
+            assert.ok(layout.vpTop >= layout.navBottom - 1, `pov-viewport overlaps top-nav: vpTop=${layout.vpTop}, navBottom=${layout.navBottom}`);
+
+            // 2. Chairs & avatars sit layered strictly behind the poker table rail
+            assert.ok(layout.table > layout.dealer);
+            assert.ok(layout.table > layout.farLeft);
+            assert.ok(layout.table > layout.topLeft);
+            assert.ok(layout.table > layout.topRight);
+            assert.ok(layout.table > layout.farRight);
+            assert.equal(layout.chairCount, 5);
+            assert.equal(layout.feltCardContainers, 4);
+
+            // 3. Dealer nameplate & active speech bubble sit strictly below nav, with bubble between nameplate and dealer avatar!
+            assert.ok(layout.dealerPlateTop >= layout.navBottom - 1, `Dealer nameplate clipped by nav: ${layout.dealerPlateTop} < ${layout.navBottom}`);
+            assert.ok(layout.dealerBubbleTop >= layout.dealerPlateBottom - 2, `Dealer bubble must sit below nameplate`);
+            assert.ok(layout.dealerBubbleBottom <= layout.dealerAvatarTop + 8, `Dealer bubble must sit above dealer seat`);
+
+            // 4. Every opponent's name+stack card sits above their seat (not hovering over poker board), below nav,
+            //    and any active speech bubble sits strictly between the name+stack card and the seat!
+            assert.equal(layout.oppChecks.length, 4);
+            for (const o of layout.oppChecks) {
+              assert.ok(o.plateTop >= layout.navBottom - 1, `Nameplate for ${o.id} clipped by nav: ${o.plateTop} < ${layout.navBottom}`);
+              assert.ok(o.plateBottom <= o.avatarTop + 4, `Nameplate for ${o.id} must sit above seat, not over poker board`);
+              if (o.bubbleActive) {
+                assert.ok(o.bubbleTop >= o.plateBottom - 2, `Bubble for ${o.id} must sit below nameplate`);
+                assert.ok(o.bubbleBottom <= o.avatarTop + 8, `Bubble for ${o.id} must sit above seat`);
+              }
+            }
           },
           { turnSpeed: 0.02 },
         );
@@ -575,7 +637,7 @@ test(
             await page.locator('#btn-random-opponents').click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
             await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
             let actionPostCount = 0;
             await page.route('**/api/action', async (route) => {
@@ -584,26 +646,27 @@ test(
               await route.continue();
             });
 
-            const betBtn = page.locator('#action-buttons-group button', { hasText: 'Bet $10' });
+            const callBtn = page.locator('#action-buttons-group button[data-choice-id="call"]');
+            const postDone = page.waitForResponse((r) => r.url().includes('/api/action'));
             // Fire two rapid clicks + a hotkey press during the 250ms network delay
-            await betBtn.click();
-            await betBtn.click({ force: true }).catch(() => {});
-            await page.keyboard.press('b');
+            await callBtn.click();
+            await callBtn.click({ force: true }).catch(() => {});
+            await page.keyboard.press('c');
+            await postDone;
 
-            // Wait for street transition (Flop or hand_over)
+            // Wait for playback & next prompt to become ready
             await page.waitForFunction(
               () => {
-                const banner = document.getElementById('street-banner')?.textContent?.trim();
                 const title = document.getElementById('action-prompt-title')?.textContent || '';
                 const btns = Array.from(document.querySelectorAll('#action-buttons-group button'));
                 const ready = btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
-                return ready && (banner === 'FLOP' || title.includes('Play another hand?'));
+                return ready && !title.includes('Submitting') && !title.includes('making their decisions');
               },
-              { timeout: 8000 },
+              { timeout: 10000 },
             );
 
             assert.equal(actionPostCount, 1, `Expected exactly 1 POST for rapid double-click, saw ${actionPostCount}`);
-            // Must be on FLOP (or hand_over if all folded) — NEVER skipped straight to TURN!
+            // Must NEVER have skipped straight to TURN!
             const banner = (await page.locator('#street-banner').textContent())?.trim();
             assert.notEqual(banner, 'TURN', 'Double-click must never skip Flop straight to Turn');
           },
@@ -622,12 +685,9 @@ test(
             await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
             await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
             await page.locator('#btn-confirm-opponents').click();
-            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
 
-            // At start of Pre-flop, all 4 opponent chat bubbles MUST be cleared!
-            assert.equal(await page.locator('.opponent-bubble.active').count(), 0);
-
+            // Start sampling before clicking Easy so we observe UTG (elon) -> CO (tony) before BTN (You),
+            // followed by SB (reginald) -> BB (buck) after You call!
             await page.evaluate(() => {
               const log: Array<{ ts: number; thinkingIds: string[]; bubbleTexts: Record<string, string> }> = [];
               (window as unknown as { __TURN_LOG__: typeof log }).__TURN_LOG__ = log;
@@ -654,16 +714,21 @@ test(
             });
 
             const startTs = Date.now();
-            await page.locator('#action-buttons-group button', { hasText: 'Bet $10' }).click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
 
             await page.waitForSelector('.character-container.is-thinking', { timeout: 3000 });
             const disabledCount = await page.locator('#action-buttons-group button:disabled').count();
-            assert.ok(disabledCount >= 3, 'Action buttons must be disabled while opponents are thinking');
+            assert.ok(disabledCount >= 2, 'Action buttons must be disabled while opponents are thinking');
 
             // Hotkeys during thinking must be ignored
             await page.keyboard.press('f');
             await page.keyboard.press('c');
 
+            // Wait for UTG & CO to finish and prompt BTN (You)
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+
+            // Wait for SB & BB to finish Pre-flop (and advance to Flop or hand_over)
             await page.waitForFunction(
               () => {
                 const banner = document.getElementById('street-banner')?.textContent?.trim();
@@ -672,7 +737,7 @@ test(
                 const ready = btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
                 return ready && (banner === 'FLOP' || title.includes('Play another hand?'));
               },
-              { timeout: 18000 },
+              { timeout: 25000 },
             );
             const elapsedMs = Date.now() - startTs;
 
@@ -698,19 +763,15 @@ test(
                 thinkingOrder.push(id);
               }
             }
-            assert.deepEqual(thinkingOrder, ['reginald', 'buck', 'elon', 'tony']);
+            // First two thinkers on Pre-flop must be UTG (elon) then CO (tony), followed by SB (reginald)
+            assert.deepEqual(thinkingOrder.slice(0, 3), ['elon', 'tony', 'reginald']);
 
-            for (const id of ['reginald', 'buck', 'elon', 'tony']) {
+            for (const id of ['elon', 'tony', 'reginald']) {
               const seenTexts = new Set<string>();
               for (const entry of turnLog) {
                 if (entry.bubbleTexts[id]) seenTexts.add(entry.bubbleTexts[id]!);
               }
               assert.ok(seenTexts.size >= 2, `Expected ${id} bubble to update from thinking -> decision`);
-            }
-
-            const currentBanner = (await page.locator('#street-banner').textContent())?.trim();
-            if (currentBanner === 'FLOP') {
-              assert.equal(await page.locator('.opponent-bubble.active').count(), 0, 'Old bubbles must clear on Flop');
             }
           },
           { turnSpeed: 1 }, // REAL 1-2 second timing!
@@ -718,9 +779,9 @@ test(
       });
 
       // ----------------------------------------------------------------------
-      // TEST 5: Strict Card Privacy on Play/Fold, Selective Showdown Reveal & Next-Hand Re-Hiding
+      // TEST 5: Card Privacy During Play, Reveal on Fold & End-of-Hand, Re-Hide on Next Hand
       // ----------------------------------------------------------------------
-      await t.test('opponents’ cards stay strictly hidden during play and on fold, reveal only active hands at Showdown, and re-hide on next hand', async () => {
+      await t.test('active opponents stay hidden during play, folded opponents reveal immediately, player fold reveals all hands at hand end, and next hand re-hides active cards', async () => {
         await withGamePage(
           async ({ page }) => {
             const leakedCards: string[] = [];
@@ -743,23 +804,40 @@ test(
 
             await page.locator('#btn-random-opponents').click();
             await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
-            assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 8);
-            assert.equal(await page.locator('.opp-cards-on-table .card:not(.card-back)').count(), 0);
+            // During active play: folded opponents reveal face-up, non-folded active opponents stay face-down!
+            const checkActiveVsFoldedCards = async () => {
+              const states = await page.evaluate(() =>
+                Array.from(document.querySelectorAll('.opp-cards-on-table')).map((el) => ({
+                  folded: el.classList.contains('folded'),
+                  faceDown: el.querySelectorAll('.card-back').length,
+                  faceUp: el.querySelectorAll('.card:not(.card-back)').length,
+                })),
+              );
+              for (const s of states) {
+                if (s.folded) {
+                  assert.equal(s.faceUp, 2, 'Folded opponent cards must be revealed face-up');
+                  assert.equal(s.faceDown, 0);
+                } else {
+                  assert.equal(s.faceDown, 2, 'Active non-folded opponent cards must stay face-down during play');
+                  assert.equal(s.faceUp, 0);
+                }
+              }
+            };
+            await checkActiveVsFoldedCards();
 
-            // Fold on Hand 1 -> all opponent cards remain facedown
+            // Fold on Hand 1 -> hand finishes with a winner AND reveals all 8 opponent cards!
             await page.locator('#action-buttons-group button', { hasText: 'Fold' }).click();
             await waitForPromptReady(page, 'Play another hand?');
-            assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 8);
-            assert.equal(await page.locator('.opp-cards-on-table .card:not(.card-back)').count(), 0);
+            assert.equal(await page.locator('.opp-cards-on-table .card:not(.card-back)').count(), 8);
+            assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 0);
 
-            // Play Again via Space -> Hand #2
+            // Play Again via Space -> Hand #2: active opponents are re-hidden!
             await page.keyboard.press('Space');
             await page.waitForFunction(() => document.getElementById('stat-hand-count')?.textContent === '2');
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
-            assert.equal(await page.locator('.opponent-bubble.active').count(), 0);
-            assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 8);
+            await waitForPromptReady(page, 'Pre-flop');
+            await checkActiveVsFoldedCards();
 
             // Play Hand #2 all the way to Showdown
             for (let step = 0; step < 12; step += 1) {
@@ -790,30 +868,17 @@ test(
             const hudStatus = (await page.locator('#hud-street-status').textContent()) || '';
             assert.ok(hudStatus.startsWith('Result:'), `Expected Result status, got: ${hudStatus}`);
 
-            const cardVisibility = await page.evaluate(() =>
-              Array.from(document.querySelectorAll('.opp-cards-on-table')).map((el) => ({
-                folded: el.classList.contains('folded'),
-                faceDown: el.querySelectorAll('.card-back').length,
-                faceUp: el.querySelectorAll('.card:not(.card-back)').length,
-              })),
-            );
-            for (const c of cardVisibility) {
-              if (c.folded) {
-                assert.equal(c.faceDown, 2);
-                assert.equal(c.faceUp, 0);
-              } else {
-                assert.equal(c.faceUp, 2);
-                assert.equal(c.faceDown, 0);
-              }
-            }
+            // At end of hand, all 8 opponent cards (both folded and showdown contenders) are revealed face-up!
+            assert.equal(await page.locator('.opp-cards-on-table .card:not(.card-back)').count(), 8);
+            assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 0);
 
-            // Clicking Play Again after Showdown MUST re-hide all 8 opponent cards!
+            // Clicking Play Again after Showdown -> Hand #3 (You = UTG, act first) MUST re-hide all 8 opponent cards!
             await page.locator('#action-buttons-group button', { hasText: 'Play Again' }).click();
             await page.waitForFunction(() => document.getElementById('stat-hand-count')?.textContent === '3');
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
             assert.equal(await page.locator('.opp-cards-on-table .card-back').count(), 8);
             assert.equal(await page.locator('.opp-cards-on-table .card:not(.card-back)').count(), 0);
-            assert.equal(await page.locator('.opponent-bubble.active').count(), 0);
+            assert.equal(await page.locator('.opponent-bubble.active').count(), 0); // Hand #3: You are UTG (act first!) -> zero opponent bubbles!
 
             assert.deepEqual(leakedCards, [], `Hidden opponent cards leaked over API: ${leakedCards.join(', ')}`);
           },
@@ -831,7 +896,7 @@ test(
             await page.locator('#btn-random-opponents').click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
             await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
             // Top brand diamond uses crisp vector SVG
             assert.equal(await page.locator('.brand .suit-icon-svg').count(), 1);
@@ -851,10 +916,10 @@ test(
             await page.keyboard.press('p');
             assert.equal(await potsWin.evaluate((el) => el.classList.contains('open')), true);
 
-            // Bet $10 and verify Table Pots window reflects updated pot >= $10
-            const betResp = page.waitForResponse((r) => r.url().includes('/api/action'));
-            await page.locator('#action-buttons-group button', { hasText: 'Bet $10' }).click();
-            await betResp;
+            // Call the Pre-flop Big Blind and verify Table Pots window reflects updated pot >= $15
+            const callResp = page.waitForResponse((r) => r.url().includes('/api/action'));
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await callResp;
             await page.waitForFunction(
               () => {
                 const title = document.getElementById('action-prompt-title')?.textContent || '';
@@ -866,7 +931,7 @@ test(
 
             const potsText = (await page.locator('#pots-window-total').textContent()) || '';
             const potAmountNum = parseInt(potsText.replace(/[^0-9]/g, ''), 10);
-            assert.ok(potAmountNum >= 10, `Expected Table Pots window >= $10, got: ${potsText}`);
+            assert.ok(potAmountNum >= 15, `Expected Table Pots window >= $15, got: ${potsText}`);
 
             // Deal hands until a diamond card appears and verify crisp SVG diamond (no raw Unicode ♦ inside cards)
             let foundDiamondSvg = false;
@@ -891,7 +956,7 @@ test(
                 }
               }
               await page.locator('#action-buttons-group button', { hasText: 'Play Again' }).click();
-              await waitForPromptReady(page, 'Your action (Pre-flop)');
+              await waitForPromptReady(page, 'Pre-flop');
             }
             assert.equal(foundDiamondSvg, true, 'Expected at least one diamond card rendered as vector SVG');
 
@@ -934,7 +999,7 @@ test(
             await page.locator('#btn-random-opponents').click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
             await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
 
             // Hide Table Pots window so we inspect unobstructed table + controls
             await page.locator('#pots-window-close').click();
@@ -986,7 +1051,7 @@ test(
             await page.locator('#btn-random-opponents').click();
             await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
             await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
             await page.locator('#pots-window-close').click();
 
             const bounds = await page.evaluate(() => {
@@ -1054,10 +1119,10 @@ test(
         const pageA = await ctxA.newPage();
         const pageB = await ctxB.newPage();
         await pageA.addInitScript(() => {
-          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+          (window as unknown as { __POKER_TURN_SPEED__: number }).__POKER_TURN_SPEED__ = 0.02;
         });
         await pageB.addInitScript(() => {
-          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+          (window as unknown as { __POKER_TURN_SPEED__: number }).__POKER_TURN_SPEED__ = 0.02;
         });
 
         try {
@@ -1065,34 +1130,37 @@ test(
           await pageA.locator('#btn-random-opponents').click();
           await pageA.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
           await pageA.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-          await waitForPromptReady(pageA, 'Your action (Pre-flop)');
+          await waitForPromptReady(pageA, 'Pre-flop');
 
-          // Open Tab B while Tab A is showing Pre-flop Bet $10 — both tabs now display the same prompt
+          // Open Tab B while Tab A is showing Pre-flop prompt — both tabs now display the same prompt
           await pageB.goto(baseUrl, { waitUntil: 'networkidle' });
-          await waitForPromptReady(pageB, 'Your action (Pre-flop)');
+          await waitForPromptReady(pageB, 'Pre-flop');
 
-          // Click Bet $10 in Tab A and wait for the Flop (or hand_over if all opponents folded)
-          await pageA.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          // Click Call in Tab A and wait for the action response & Tab A to reach its next ready prompt
+          const tabAResp = pageA.waitForResponse((r) => r.url().includes('/api/action'));
+          await pageA.locator('#action-buttons-group button[data-choice-id="call"]').click();
+          await tabAResp;
           await pageA.waitForFunction(
             () => {
-              const banner = document.getElementById('street-banner')?.textContent?.trim();
               const title = document.getElementById('action-prompt-title')?.textContent || '';
-              return banner === 'FLOP' || title.includes('Play another hand?');
+              const btns = Array.from(document.querySelectorAll('#action-buttons-group button'));
+              const ready = btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
+              return ready && !title.includes('Submitting') && !title.includes('making their decisions');
             },
-            { timeout: 8000 },
+            { timeout: 10000 },
           );
 
           const stateAfterTabA = await apiGetState(baseUrl);
           const revAfterTabA = stateAfterTabA.stateRevision;
           const contribAfterTabA = stateAfterTabA.playerHandContribution;
 
-          // Now click the still-visible stale Bet $10 button in Tab B!
+          // Now click the still-visible stale Call button in Tab B!
           const staleRespPromise = pageB.waitForResponse((r) => r.url().includes('/api/action'));
-          await pageB.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          await pageB.locator('#action-buttons-group button[data-choice-id="call"]').click();
           const staleResp = await staleRespPromise;
           assert.equal(staleResp.status(), 409, 'Stale tab submission must return HTTP 409 Conflict');
 
-          // Server state MUST NOT have changed (no $20 flop bet applied!)
+          // Server state MUST NOT have changed (no second wager applied!)
           const stateAfterTabB = await apiGetState(baseUrl);
           assert.equal(stateAfterTabB.stateRevision, revAfterTabA);
           assert.equal(stateAfterTabB.playerHandContribution, contribAfterTabA);
@@ -1122,7 +1190,7 @@ test(
 
             // Start hand and fold so we reach Play Again / Cash Out prompt
             await page.keyboard.press('1');
-            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await waitForPromptReady(page, 'Pre-flop');
             await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
             await waitForPromptReady(page, 'Play another hand?');
 
@@ -1146,7 +1214,7 @@ test(
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
         const oldTab = await ctx.newPage();
         await oldTab.addInitScript(() => {
-          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+          (window as unknown as { __POKER_TURN_SPEED__: number }).__POKER_TURN_SPEED__ = 0.02;
         });
 
         let instance2: PokerServerInstance | null = null;
@@ -1158,7 +1226,7 @@ test(
           }
           await oldTab.locator('#btn-confirm-opponents').click();
           await oldTab.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
-          await waitForPromptReady(oldTab, 'Your action (Pre-flop)');
+          await waitForPromptReady(oldTab, 'Pre-flop');
           const state1 = await apiGetState(baseUrl);
           assert.equal(state1.stateRevision, 3);
 
@@ -1174,17 +1242,17 @@ test(
           assert.equal(state2Before.stateRevision, 3, 'Server #2 should be at identical numeric revision 3');
           assert.notEqual(state2Before.tableInstanceId, state1.tableInstanceId);
 
-          // Clicking the still-visible Bet $10 button in the old tab MUST be rejected with 409 (instance mismatch!)
+          // Clicking the still-visible Call button in the old tab MUST be rejected with 409 (instance mismatch!)
           const staleRespPromise = oldTab.waitForResponse((r) => r.url().includes('/api/action'));
-          await oldTab.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          await oldTab.locator('#action-buttons-group button[data-choice-id="call"]').click();
           const staleResp = await staleRespPromise;
           assert.equal(staleResp.status(), 409, 'Old tab from previous server instance must receive HTTP 409');
 
-          // Server #2 hand must NOT have advanced (still Pre-flop, pot === 0, revision === 3)
+          // Server #2 hand must NOT have advanced (still Pre-flop, same pot & revision === 3)
           const state2After = await apiGetState(baseUrl);
           assert.equal(state2After.stateRevision, 3);
           assert.equal(state2After.streetIndex, 0);
-          assert.equal(state2After.pot, 0);
+          assert.equal(state2After.pot, state2Before.pot);
 
           // Old tab must have refreshed to Server #2's new roster!
           const seatedIds = await oldTab.evaluate(() =>
@@ -1205,6 +1273,82 @@ test(
             }
           }
         }
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 12: Rotating Table Positions (BTN, SB, BB, UTG, CO) & Moving Dealer Button (D)
+      // ----------------------------------------------------------------------
+      await t.test('table positions (BTN, SB, BB, UTG, CO) and Dealer Button puck rotate clockwise across every new hand', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+
+            const expectedPlayerPos = ['BTN', 'CO', 'UTG', 'BB', 'SB', 'BTN'];
+            const expectedBtnClasses = [
+              'btn-at-player',
+              'btn-at-far-left',
+              'btn-at-top-left',
+              'btn-at-top-right',
+              'btn-at-far-right',
+              'btn-at-player',
+            ];
+
+            for (let handIdx = 0; handIdx < 6; handIdx += 1) {
+              // Wait until either Pre-flop prompt or hand_over (if everyone folded to BB)
+              await page.waitForFunction(
+                () => {
+                  const title = document.getElementById('action-prompt-title')?.textContent || '';
+                  const btns = Array.from(document.querySelectorAll('#action-buttons-group button'));
+                  const ready = btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
+                  return ready && (title.includes('Pre-flop') || title.includes('Play another hand?'));
+                },
+                { timeout: 10000 },
+              );
+
+              const uiPositions = await page.evaluate(() => {
+                const statPos = document.getElementById('stat-position')?.textContent?.trim() || '';
+                const playerBadge = document.getElementById('player-position-badge')?.textContent?.trim() || '';
+                const btnClasses = Array.from(document.getElementById('dealer-button')?.classList || []);
+                const oppBadges = ['reginald', 'buck', 'elon', 'tony'].map(
+                  (id) => document.getElementById(`opp-pos-${id}`)?.textContent?.trim() || '',
+                );
+                const potsBadges = Array.from(document.querySelectorAll('#pots-window-body .pos-badge')).map(
+                  (el) => el.textContent?.trim() || '',
+                );
+                return { statPos, playerBadge, btnClasses, oppBadges, potsBadges };
+              });
+
+              assert.equal(uiPositions.statPos, expectedPlayerPos[handIdx]);
+              assert.ok(uiPositions.playerBadge.startsWith(expectedPlayerPos[handIdx]!));
+              assert.ok(
+                uiPositions.btnClasses.includes(expectedBtnClasses[handIdx]!),
+                `Hand ${handIdx + 1}: expected dealer button ${expectedBtnClasses[handIdx]}, got ${uiPositions.btnClasses.join(' ')}`,
+              );
+              const allFive = [uiPositions.statPos, ...uiPositions.oppBadges].sort();
+              assert.deepEqual(allFive, ['BB', 'BTN', 'CO', 'SB', 'UTG']);
+              assert.deepEqual([...uiPositions.potsBadges].sort(), ['BB', 'BTN', 'CO', 'SB', 'UTG']);
+
+              if (handIdx < 5) {
+                const foldBtn = page.locator('#action-buttons-group button[data-choice-id="fold"]');
+                if ((await foldBtn.count()) > 0) {
+                  await foldBtn.click();
+                  await waitForPromptReady(page, 'Play another hand?');
+                }
+                await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+                await page.waitForFunction(
+                  (expectedHand: string) => document.getElementById('stat-hand-count')?.textContent === expectedHand,
+                  String(handIdx + 2),
+                );
+              }
+            }
+          },
+          { turnSpeed: 0.02 },
+        );
       });
     } finally {
       await browser.close();

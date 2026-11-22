@@ -101,18 +101,26 @@ test('PokerGameEngine initializes in select_opponents stage with all 8 available
   assert.equal(selectedState.prompt?.choices.length, 3);
 });
 
-test('PokerGameEngine handles mode selection and seats 4 unique opponents from the 8 VIP characters', () => {
+test('PokerGameEngine handles mode selection, seats 4 unique opponents, assigns table positions, and posts blinds', () => {
   assert.equal(ALL_OPPONENT_PROFILES.length, 8);
   const validIds = new Set(ALL_OPPONENT_PROFILES.map((p) => p.id));
   assert.deepEqual([...validIds].sort(), ['bruce', 'buck', 'elon', 'meiling', 'reginald', 'tariq', 'tony', 'viktor']);
 
-  const engine = new PokerGameEngine();
+  const engine = new PokerGameEngine({ random: () => 0.5 });
   engine.act('random_opponents');
   const state = engine.act('easy');
   assert.equal(state.mode, 'easy');
-  assert.equal(state.stage, 'player_action');
+  assert.equal(state.stage, 'player_response'); // On Hand #1 You are BTN facing the $10 Big Blind
   assert.equal(state.streetIndex, 0);
   assert.equal(state.streetName, 'Pre-flop');
+  assert.equal(state.buttonSeatIndex, 0);
+  assert.equal(state.playerPosition, 'BTN');
+  assert.equal(state.smallBlind, 5);
+  assert.equal(state.bigBlind, 10);
+  assert.deepEqual(
+    state.opponents.map((o) => o.position),
+    ['SB', 'BB', 'UTG', 'CO'],
+  );
   assert.equal(state.playerCards.length, 2);
   assert.equal(state.opponentCards.length, 2);
   assert.equal(state.opponentCardsHidden, true);
@@ -123,37 +131,122 @@ test('PokerGameEngine handles mode selection and seats 4 unique opponents from t
     state.opponents.map((o) => o.seat),
     ['far-left', 'top-left', 'top-right', 'far-right'],
   );
+  // SB posted $5, BB posted $10, UTG & CO called $10 (roll = 0.5)
+  assert.equal(state.opponents[0]!.handContribution, 5);
+  assert.equal(state.opponents[1]!.handContribution, 10);
   for (const opp of state.opponents) {
     assert.ok(validIds.has(opp.id));
-    assert.equal(opp.chips, 500);
-    assert.equal(opp.handContribution, 0);
     assert.equal(opp.totalPotWon, 0);
     assert.equal(opp.cards.length, 2);
     assert.equal(opp.cardsHidden, true);
     assert.equal(opp.cards[0]?.str, '??');
-    assert.equal(opp.folded, false);
   }
   assert.equal(state.board.length, 0);
-  assert.equal(state.pot, 0);
+  assert.ok(state.pot >= 15);
 });
 
-test('PokerGameEngine handles player fold keeping all 4 opponents’ cards hidden', () => {
-  const engine = new PokerGameEngine();
-  engine.act('medium');
+test('PokerGameEngine rotates BTN/SB/BB/UTG/CO clockwise every new hand and acts UTG-first pre-flop / SB-first post-flop', () => {
+  const engine = new PokerGameEngine({ random: () => 0.5 }); // opponents always call/check
+  engine.act('select_opponents:reginald,buck,elon,tony');
+
+  const expectedPlayerPositions = ['BTN', 'CO', 'UTG', 'BB', 'SB', 'BTN'] as const;
+  const expectedOppPositions = [
+    ['SB', 'BB', 'UTG', 'CO'],
+    ['BTN', 'SB', 'BB', 'UTG'],
+    ['CO', 'BTN', 'SB', 'BB'],
+    ['UTG', 'CO', 'BTN', 'SB'],
+    ['BB', 'UTG', 'CO', 'BTN'],
+    ['SB', 'BB', 'UTG', 'CO'],
+  ];
+
+  let state = engine.act('easy');
+  for (let hand = 0; hand < 6; hand += 1) {
+    assert.equal(state.handCount, hand + 1);
+    assert.equal(state.buttonSeatIndex, hand % 5);
+    assert.equal(state.playerPosition, expectedPlayerPositions[hand]);
+    assert.deepEqual(
+      state.opponents.map((o) => o.position),
+      expectedOppPositions[hand],
+    );
+
+    // Check pre-flop UTG-first order on Hand #1 (BTN = You -> UTG = elon, CO = tony act BEFORE You!)
+    if (hand === 0) {
+      assert.deepEqual(
+        state.turnEvents.map((e) => e.opponentId),
+        ['elon', 'tony'],
+      );
+      // Calling as BTN lets SB (reginald) & BB (buck) finish Pre-flop, then SB (reginald) starts Flop!
+      const afterCall = engine.act('call');
+      assert.equal(afterCall.streetName, 'Flop');
+      const flopTurnOrder = afterCall.turnEvents
+        .filter((e) => e.streetName === 'Flop')
+        .map((e) => e.opponentId);
+      assert.deepEqual(flopTurnOrder, ['reginald', 'buck', 'elon', 'tony']);
+      state = afterCall;
+    }
+
+    // Check Hand #3 (You = UTG -> You act FIRST pre-flop, zero opponent turnEvents ahead of you!)
+    if (hand === 2) {
+      assert.equal(state.playerPosition, 'UTG');
+      assert.equal(state.turnEvents.length, 0);
+      assert.equal(state.pot, 15); // SB ($5) + BB ($10)
+    }
+
+    // Check Hand #4 (You = BB -> You posted $10 BB and have Check option pre-flop!)
+    if (hand === 3) {
+      assert.equal(state.playerPosition, 'BB');
+      assert.equal(state.playerHandContribution, 10);
+      assert.equal(state.stage, 'player_action');
+      assert.ok(state.prompt?.choices.some((c) => c.id === 'check'));
+    }
+
+    // Check Hand #5 (You = SB -> You posted $5 SB and face $5 to complete!)
+    if (hand === 4) {
+      assert.equal(state.playerPosition, 'SB');
+      assert.equal(state.playerHandContribution, 5);
+      assert.equal(state.stage, 'player_response');
+      assert.equal(state.currentBet, 5);
+    }
+
+    // Fold to finish current hand and deal next hand
+    if (state.stage !== 'hand_over') {
+      state = engine.act('fold');
+    }
+    assert.equal(state.stage, 'hand_over');
+    if (hand < 5) {
+      state = engine.act('yes');
+    }
+  }
+});
+
+test('PokerGameEngine reveals folded opponents’ cards and reveals all players’ cards when player folds and hand ends', () => {
+  const engine = new PokerGameEngine({ random: () => 0.5 });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  const startState = engine.act('medium');
+  // Active (non-folded) opponents keep cards strictly hidden during play
+  for (const opp of startState.opponents) {
+    if (!opp.folded) {
+      assert.equal(opp.cardsHidden, true);
+      assert.equal(opp.cards[0]?.str, '??');
+    } else {
+      assert.equal(opp.cardsHidden, false);
+      assert.notEqual(opp.cards[0]?.str, '??');
+    }
+  }
+
+  // Player folds -> hand plays out to a winner and reveals all players' cards!
   const state = engine.act('fold');
   assert.equal(state.stage, 'hand_over');
   assert.equal(state.outcome?.result, 'fold');
-  // All opponents' cards stay hidden when player folds
-  assert.equal(state.opponentCardsHidden, true);
-  assert.equal(state.opponentCards[0]?.str, '??');
+  assert.equal(state.opponentCardsHidden, false);
   for (const opp of state.opponents) {
-    assert.equal(opp.cardsHidden, true);
-    assert.equal(opp.cards[0]?.str, '??');
+    assert.equal(opp.cardsHidden, false);
+    assert.notEqual(opp.cards[0]?.str, '??');
   }
   assert.equal(state.board.length, 5);
 });
 
-test('PokerGameEngine plays multi-opponent hand through to showdown revealing only active opponents', () => {
+test('PokerGameEngine plays multi-opponent hand through to showdown revealing folded and showdown hands', () => {
   const engine = new PokerGameEngine();
   engine.act('hard');
 
@@ -161,6 +254,16 @@ test('PokerGameEngine plays multi-opponent hand through to showdown revealing on
   let maxSteps = 20;
 
   while (state.stage !== 'hand_over' && maxSteps > 0) {
+    // During play, non-folded opponents MUST remain hidden while folded opponents ARE revealed!
+    for (const opp of state.opponents) {
+      if (opp.folded) {
+        assert.equal(opp.cardsHidden, false);
+        assert.notEqual(opp.cards[0]?.str, '??');
+      } else {
+        assert.equal(opp.cardsHidden, true);
+        assert.equal(opp.cards[0]?.str, '??');
+      }
+    }
     maxSteps -= 1;
     if (state.stage === 'player_action') {
       state = engine.act('check');
@@ -173,27 +276,18 @@ test('PokerGameEngine plays multi-opponent hand through to showdown revealing on
 
   assert.equal(state.stage, 'hand_over');
   assert.ok(state.outcome !== null);
-  const activeOpps = state.opponents.filter((o) => !o.folded);
-  const foldedOpps = state.opponents.filter((o) => o.folded);
-
-  if (activeOpps.length > 0) {
-    assert.equal(state.opponentCardsHidden, false);
-    for (const opp of activeOpps) {
-      assert.equal(opp.cardsHidden, false);
-      assert.notEqual(opp.cards[0]?.str, '??');
-    }
-  }
-  for (const opp of foldedOpps) {
-    assert.equal(opp.cardsHidden, true);
-    assert.equal(opp.cards[0]?.str, '??');
+  assert.equal(state.opponentCardsHidden, false);
+  for (const opp of state.opponents) {
+    assert.equal(opp.cardsHidden, false);
+    assert.notEqual(opp.cards[0]?.str, '??');
   }
   // Outcome message and prompt clearly explain the result
   assert.ok(state.outcome.message.length > 0);
   assert.ok(state.prompt?.message.includes(state.outcome.message));
 });
 
-test('PokerGameEngine resets and re-hides all 4 opponents’ cards on subsequent hand', () => {
-  const engine = new PokerGameEngine();
+test('PokerGameEngine resets and re-hides active opponents’ cards on subsequent hand', () => {
+  const engine = new PokerGameEngine({ random: () => 0.5 });
   engine.act('hard');
   let state = engine.getState();
   while (state.stage !== 'hand_over') {
@@ -202,66 +296,68 @@ test('PokerGameEngine resets and re-hides all 4 opponents’ cards on subsequent
     else break;
   }
 
-  const nextHandState = engine.act('yes'); // Play Again
-  assert.equal(nextHandState.stage, 'player_action');
+  const nextHandState = engine.act('yes'); // Play Again (Hand #2: You rotate from BTN -> CO)
+  assert.ok(
+    nextHandState.stage === 'player_action' || nextHandState.stage === 'player_response',
+    `Expected active player prompt, got ${nextHandState.stage}`,
+  );
   assert.equal(nextHandState.streetName, 'Pre-flop');
-  assert.equal(nextHandState.opponentCardsHidden, true);
-  assert.equal(nextHandState.opponentCards[0]?.str, '??');
+  assert.equal(nextHandState.playerPosition, 'CO');
   assert.equal(nextHandState.handCount, 2);
   for (const opp of nextHandState.opponents) {
-    assert.equal(opp.cardsHidden, true);
-    assert.equal(opp.cards[0]?.str, '??');
-    assert.equal(opp.folded, false);
+    if (opp.folded) {
+      assert.equal(opp.cardsHidden, false);
+    } else {
+      assert.equal(opp.cardsHidden, true);
+      assert.equal(opp.cards[0]?.str, '??');
+    }
   }
 });
 
 test('PokerGameEngine emits sequential turnEvents with thinking and decision speeches for each active opponent', () => {
-  const engine = new PokerGameEngine();
-  const startState = engine.act('medium');
-  const expectedOrder = startState.opponents.map((o) => o.id);
-
-  const betState = engine.act('bet');
-  assert.equal(betState.turnEvents.length, 4);
+  // Deterministic RNG (0.5 -> opponents call/check, no pre-flop raise) so You as BTN can raise to $20 and trigger all 4 opponents clockwise!
+  const engine = new PokerGameEngine({ random: () => 0.5 });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  const startState = engine.act('easy');
+  // UTG (elon) and CO (tony) acted ahead of BTN (You)
   assert.deepEqual(
-    betState.turnEvents.map((e) => e.opponentId),
-    expectedOrder,
+    startState.turnEvents.map((e) => e.opponentId),
+    ['elon', 'tony'],
   );
-  assert.equal(betState.turnStartPot, 10);
-  for (const event of betState.turnEvents) {
+
+  const raiseState = engine.act('bet'); // Raise to $20 -> re-queues all 4 opponents clockwise [reginald, buck, elon, tony]!
+  const preFlopEvents = raiseState.turnEvents.filter((e) => e.streetName === 'Pre-flop');
+  assert.equal(preFlopEvents.length, 4);
+  assert.deepEqual(
+    preFlopEvents.map((e) => e.opponentId),
+    ['reginald', 'buck', 'elon', 'tony'],
+  );
+  for (const event of preFlopEvents) {
     assert.ok(event.thinkingSpeech.length > 0);
     assert.ok(event.decisionSpeech.length > 0);
     assert.ok(event.actionBadge.length > 0);
     assert.ok(['call', 'fold'].includes(event.action));
   }
 
-  // Subsequent non-opponent-turn action (fold) should clear turnEvents
-  if (betState.stage === 'player_action') {
+  // Subsequent fold should clear turnEvents
+  if (raiseState.stage === 'player_action' || raiseState.stage === 'player_response') {
     const foldState = engine.act('fold');
     assert.equal(foldState.turnEvents.length, 0);
   }
 
-  // Shuffling a new table seats 4 unique opponents from the 7-character pool
+  // Shuffling a new table seats 4 unique opponents from the 8-character pool
   const newTableState = engine.act('new_table');
   assert.equal(newTableState.opponents.length, 4);
   assert.equal(new Set(newTableState.opponents.map((o) => o.id)).size, 4);
 
   // Verify per-opponent handContribution & totalPotWon tracking and bubble clearing on new street/hand
-  const potCheckEngine = new PokerGameEngine();
+  const potCheckEngine = new PokerGameEngine({ random: () => 0.5 });
   potCheckEngine.act('select_opponents:reginald,buck,elon,tony');
-  const handStart = potCheckEngine.act('easy');
-  for (const opp of handStart.opponents) {
-    assert.equal(opp.speech, '');
-  }
-  const afterBet = potCheckEngine.act('bet');
-  assert.equal(afterBet.playerHandContribution, 10);
-  const totalOppInPot = afterBet.opponents.reduce((sum, o) => sum + o.handContribution, 0);
-  assert.equal(totalOppInPot + afterBet.playerHandContribution, afterBet.pot);
-  if (afterBet.stage === 'player_action') {
-    // Advanced to Flop: all opponent chat bubbles must be cleared for the new round
-    for (const opp of afterBet.opponents) {
-      assert.equal(opp.speech, '');
-    }
-  }
+  potCheckEngine.act('easy');
+  const afterCall = potCheckEngine.act('call');
+  assert.equal(afterCall.playerHandContribution, 10);
+  const totalOppInPot = afterCall.opponents.reduce((sum, o) => sum + o.handContribution, 0);
+  assert.equal(totalOppInPot + afterCall.playerHandContribution, afterCall.pot);
 });
 
 test('PokerGameEngine enforces chip stack limits, runs out board when player is all-in, and settles side pots by contribution', () => {
@@ -289,9 +385,14 @@ test('PokerGameEngine enforces chip stack limits, runs out board when player is 
 
   // RNG: on easy mode, 0.35 triggers facingBet=false -> bet (<0.45) and facingBet=true -> call (>=0.25).
   // Player starts with $5; all 4 opponents start with $500 (total chips = $2005).
+  // Use smallBlind/bigBlind = 0 here to reproduce the exact $5 opening all-in -> $25 main + $360 side pot scenario,
+  // with player starting at UTG (initialButtonSeatIndex: 2) so player acts first pre-flop!
   const sidePotEngine = new PokerGameEngine({
     initialPlayerChips: 5,
     initialOpponentChips: 500,
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
     random: () => 0.35,
     deckFactory: makeDeterministicDeck,
   });
@@ -336,6 +437,9 @@ test('PokerGameEngine enforces chip stack limits, runs out board when player is 
   const opponentsAllInEngine = new PokerGameEngine({
     initialPlayerChips: 50,
     initialOpponentChips: 25,
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
     random: () => 0.5, // opponents always check/call
     deckFactory: makeDeterministicDeck,
   });
@@ -370,10 +474,13 @@ test('PokerGameEngine excludes returned uncalled bets from uncontested winnings 
     return { draw: () => cards.shift()! };
   };
 
-  // 1. All 4 opponents fold to opening $10 bet (roll=0.05 -> facingBet=true folds on easy mode!)
+  // 1a. With $0 blinds, all 4 opponents fold to opening $10 bet -> uncalled $10 returned, $0 won, handsWon=1
   const foldOutEngine = new PokerGameEngine({
     initialPlayerChips: 500,
     initialOpponentChips: 500,
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
     random: () => 0.05,
     deckFactory: makeDeterministicDeck,
   });
@@ -387,10 +494,30 @@ test('PokerGameEngine excludes returned uncalled bets from uncontested winnings 
   assert.equal(uncontested.outcome?.pot, 0);
   assert.ok(uncontested.outcome?.message.includes('returned'));
 
+  // 1b. With real $5/$10 blinds, player raises to $20 and everyone folds -> $10 uncalled excess returned,
+  //     player wins ONLY the $15 blinds ($515 stack, $25 contested pot = $10 matched + $15 blinds, NOT $35!)
+  const blindFoldEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 2, // You = UTG
+    random: () => 0.05,
+    deckFactory: makeDeterministicDeck,
+  });
+  blindFoldEngine.act('select_opponents:reginald,buck,elon,tony');
+  blindFoldEngine.act('easy');
+  const wonBlinds = blindFoldEngine.act('bet'); // Raise to $20 -> everyone folds!
+  assert.equal(wonBlinds.stage, 'hand_over');
+  assert.equal(wonBlinds.playerChips, 515); // +$15 net from SB ($5) + BB ($10)
+  assert.equal(wonBlinds.playerTotalPotWon, 25); // Matched $10 + $10 BB + $5 SB (uncalled $10 excess excluded!)
+  assert.equal(wonBlinds.playerHandsWon, 1);
+
   // 2. Check down all four streets ($0 pot) with strongest hand -> playerHandsWon must increment!
   const checkDownEngine = new PokerGameEngine({
     initialPlayerChips: 500,
     initialOpponentChips: 500,
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
     random: () => 0.5, // opponents always check
     deckFactory: makeDeterministicDeck,
   });
@@ -410,10 +537,7 @@ test('PokerGameEngine excludes returned uncalled bets from uncontested winnings 
 
 test('PokerGameEngine settles post-fold side pots by contribution and returns unmatched wagers', () => {
   // Seat order: buck (Seat 1), reginald (Seat 2), elon (Seat 3), tony (Seat 4).
-  // Hand 1 gives Buck $65 and Reg/Elon/Tony $15 each.
-  // Hand 2: Player folds Pre-flop. Buck ($65, Seat 1) bets $10 Pre-flop + $20 Flop ($30 total),
-  // while Reg/Elon/Tony ($15 each) call $10 Pre-flop + $5 all-in Flop ($15 total).
-  // Reginald has Pocket Aces and wins ONLY the $60 main pot; Buck's $15 unmatched excess MUST return to Buck!
+  // Use $0 blinds here for clean deterministic $65 vs $15 stack setup across Hand 1 -> Hand 2.
   let handNum = 0;
   const makeDeck = () => {
     handNum += 1;
@@ -447,6 +571,9 @@ test('PokerGameEngine settles post-fold side pots by contribution and returns un
   const engine = new PokerGameEngine({
     initialPlayerChips: 500,
     initialOpponentChips: 25,
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
     random: () => rngVal,
     deckFactory: makeDeck,
   });
@@ -476,8 +603,14 @@ test('PokerGameEngine settles post-fold side pots by contribution and returns un
 
 test('PokerGameEngine keeps multiway hands going after player fold and ends immediately if 1 contender remains', () => {
   // Deterministic RNG: roll = 0.05 -> on easy mode facingBet=false (< 0.45 => bet), facingBet=true (< 0.25 => fold)!
-  // So after player folds on pre-flop, seat 1 bets $10 and seats 2, 3, 4 all fold -> hand ends immediately on Pre-flop!
-  const uncontestedEngine = new PokerGameEngine({ random: () => 0.05 });
+  // Start with You = UTG (initialButtonSeatIndex: 2, smallBlind/bigBlind = 0):
+  // Player folds Pre-flop -> Seat 1 bets $10 and Seats 2, 3, 4 all fold -> hand ends immediately on Pre-flop!
+  const uncontestedEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
+    random: () => 0.05,
+  });
   uncontestedEngine.act('select_opponents:reginald,buck,elon,tony');
   uncontestedEngine.act('easy');
   const foldedEarly = uncontestedEngine.act('fold');
@@ -490,17 +623,18 @@ test('PokerGameEngine keeps multiway hands going after player fold and ends imme
   assert.ok(foldedEarly.dealerSpeech.includes('last player standing'));
 
   // Deterministic RNG: roll = 0.35 -> on easy mode facingBet=false (< 0.45 => bet), facingBet=true (>= 0.25 => call)!
-  // So all 4 opponents bet & call across Pre-flop ($10), Flop ($20), Turn ($30), and River ($40) = $400 total pot!
-  const multiwayEngine = new PokerGameEngine({ random: () => 0.35 });
+  // With $5/$10 blinds: Pre-flop raises to $20 (4 x $20 = $80) + Flop ($80) + Turn ($120) + River ($160) = $440 pot!
+  const multiwayEngine = new PokerGameEngine({ initialButtonSeatIndex: 2, random: () => 0.35 });
   multiwayEngine.act('select_opponents:reginald,buck,elon,tony');
   multiwayEngine.act('easy');
   const foldedMultiway = multiwayEngine.act('fold');
   assert.equal(foldedMultiway.stage, 'hand_over');
   assert.equal(foldedMultiway.board.length, 5);
-  assert.equal(foldedMultiway.pot, 400);
+  assert.equal(foldedMultiway.pot, 440);
+  // Once the hand finishes after player folds, all opponents' cards are revealed so the player sees the winner's hand
   for (const opp of foldedMultiway.opponents) {
-    assert.equal(opp.cardsHidden, true);
-    assert.equal(opp.cards[0]?.str, '??');
+    assert.equal(opp.cardsHidden, false);
+    assert.notEqual(opp.cards[0]?.str, '??');
   }
 });
 
@@ -590,7 +724,8 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.equal(actRes.statusCode, 200);
   const actState = JSON.parse(actRes.body) as SerializedGameState;
   assert.equal(actState.mode, 'easy');
-  assert.equal(actState.stage, 'player_action');
+  assert.ok(actState.stage === 'player_action' || actState.stage === 'player_response');
+  assert.equal(actState.playerPosition, 'BTN');
 
   // 3. GET / (index.html) with frame-ancestors CSP
   const htmlRes = await simulateRequest(handler, { method: 'GET', url: '/' });

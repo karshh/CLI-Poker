@@ -87,6 +87,20 @@ export interface NarrativeEntry {
 }
 
 export type OpponentSeat = 'far-left' | 'top-left' | 'top-right' | 'far-right';
+export type TablePosition = 'BTN' | 'SB' | 'BB' | 'UTG' | 'CO';
+
+export const TABLE_POSITIONS: readonly TablePosition[] = ['BTN', 'SB', 'BB', 'UTG', 'CO'];
+export const TABLE_POSITION_LABELS: Record<TablePosition, string> = {
+  BTN: 'Dealer Button',
+  SB: 'Small Blind',
+  BB: 'Big Blind',
+  UTG: 'Under the Gun',
+  CO: 'Cutoff',
+};
+
+export const SMALL_BLIND = 5;
+export const BIG_BLIND = 10;
+
 export type OpponentReaction =
   | 'neutral'
   | 'confident'
@@ -112,6 +126,9 @@ export interface OpponentData {
   title: string;
   emoji: string;
   seat: OpponentSeat;
+  position: TablePosition;
+  positionLabel: string;
+  isButton: boolean;
   chips: number;
   handContribution: number;
   totalPotWon: number;
@@ -138,9 +155,16 @@ export interface TurnEvent {
   actionBadge: string;
   reaction: OpponentReaction;
   folded: boolean;
+  revealedCards?: CardData[];
   chipsAfter: number;
   handContributionAfter: number;
   potAfter: number;
+}
+
+export interface TurnStartSeatSnapshot {
+  chips: number;
+  handContribution: number;
+  folded: boolean;
 }
 
 export interface SerializedGameState {
@@ -151,9 +175,17 @@ export interface SerializedGameState {
   mode: Mode | null;
   streetIndex: number;
   streetName: string;
+  buttonSeatIndex: number;
+  playerPosition: TablePosition;
+  playerPositionLabel: string;
+  smallBlind: number;
+  bigBlind: number;
   currentBet: number;
   pot: number;
   turnStartPot: number;
+  turnStartPlayerChips: number;
+  turnStartPlayerContribution: number;
+  turnStartOpponents: Record<string, TurnStartSeatSnapshot>;
   turnEvents: TurnEvent[];
   playerChips: number;
   playerHandContribution: number;
@@ -390,6 +422,7 @@ interface InternalOpponent {
   seat: OpponentSeat;
   chips: number;
   handContribution: number;
+  streetContribution: number;
   totalPotWon: number;
   handsWon: number;
   cards: [Card, Card] | null;
@@ -404,6 +437,9 @@ interface InternalOpponent {
 export interface PokerGameEngineOptions {
   initialPlayerChips?: number;
   initialOpponentChips?: number;
+  initialButtonSeatIndex?: number;
+  smallBlind?: number;
+  bigBlind?: number;
   random?: () => number;
   deckFactory?: () => Pick<Deck, 'draw'>;
 }
@@ -453,15 +489,20 @@ export class PokerGameEngine {
   private readonly deckFactory: () => Pick<Deck, 'draw'>;
   private readonly defaultPlayerChips: number;
   private readonly defaultOpponentChips: number;
+  private readonly initialButtonSeatIndex: number;
+  private readonly smallBlind: number;
+  private readonly bigBlind: number;
   private deck: Pick<Deck, 'draw'> = new Deck();
   private readonly tableInstanceId: string = randomUUID();
   private stateRevision = 1;
   private mode: Mode | null = null;
   private stage: GameStage = 'select_opponents';
   private streetIndex = 0;
+  private buttonSeatIndex = 0;
   private pot = 0;
   private playerChips: number;
   private playerHandContribution = 0;
+  private playerStreetContribution = 0;
   private playerTotalPotWon = 0;
   private playerHandsWon = 0;
   private playerFolded = false;
@@ -475,8 +516,13 @@ export class PokerGameEngine {
   private handCount = 0;
   private lastAction: SerializedGameState['lastAction'] = null;
   private currentBettorName: string | null = null;
-  private currentStreetWager = 0;
+  private currentStreetHighBet = 0;
+  private streetHasRaise = false;
+  private streetActionQueue: number[] = [];
   private turnStartPot = 0;
+  private turnStartPlayerChips = 0;
+  private turnStartPlayerContribution = 0;
+  private turnStartOpponents: Record<string, TurnStartSeatSnapshot> = {};
   private turnEvents: TurnEvent[] = [];
 
   constructor(options: PokerGameEngineOptions = {}) {
@@ -485,14 +531,69 @@ export class PokerGameEngine {
     this.defaultPlayerChips = options.initialPlayerChips ?? 500;
     this.playerChips = this.defaultPlayerChips;
     this.defaultOpponentChips = options.initialOpponentChips ?? 500;
+    this.initialButtonSeatIndex = (((options.initialButtonSeatIndex ?? 0) % 5) + 5) % 5;
+    this.buttonSeatIndex = this.initialButtonSeatIndex;
+    this.smallBlind = options.smallBlind ?? SMALL_BLIND;
+    this.bigBlind = options.bigBlind ?? BIG_BLIND;
     this.stage = 'select_opponents';
     this.seatOpponents(pickFourOpponents(this.random));
+    this.captureTurnStartSnapshot();
     this.narrative = [
       {
         speaker: 'Dealer',
         text: 'Welcome to VIP Texas Hold’em! Select 4 opponents from the roster to begin.',
       },
     ];
+  }
+
+  private getSeatPosition(seatIndex: number): TablePosition {
+    const offset = (seatIndex - this.buttonSeatIndex + 5) % 5;
+    return TABLE_POSITIONS[offset]!;
+  }
+
+  private buildStreetOrder(startSeatIndex: number): number[] {
+    return [0, 1, 2, 3, 4].map((offset) => (startSeatIndex + offset) % 5);
+  }
+
+  private captureTurnStartSnapshot(): void {
+    this.turnStartPot = this.pot;
+    this.turnStartPlayerChips = this.playerChips;
+    this.turnStartPlayerContribution = this.playerHandContribution;
+    const oppSnap: Record<string, TurnStartSeatSnapshot> = {};
+    for (const opp of this.opponents) {
+      oppSnap[opp.profile.id] = {
+        chips: opp.chips,
+        handContribution: opp.handContribution,
+        folded: opp.folded,
+      };
+    }
+    this.turnStartOpponents = oppSnap;
+  }
+
+  private isSeatActive(seatIndex: number): boolean {
+    if (seatIndex === 0) return !this.playerFolded;
+    const opp = this.opponents[seatIndex - 1];
+    return Boolean(opp && !opp.folded && opp.cards);
+  }
+
+  private getSeatChips(seatIndex: number): number {
+    if (seatIndex === 0) return this.playerChips;
+    return this.opponents[seatIndex - 1]?.chips ?? 0;
+  }
+
+  private getSeatStreetContribution(seatIndex: number): number {
+    if (seatIndex === 0) return this.playerStreetContribution;
+    return this.opponents[seatIndex - 1]?.streetContribution ?? 0;
+  }
+
+  private countActiveSeats(): number {
+    return (this.playerFolded ? 0 : 1) + this.getActiveOpponents().length;
+  }
+
+  private countFundedActiveSeats(): number {
+    const fundedOpps = this.getActiveOpponents().filter((o) => o.chips > 0).length;
+    const playerFunded = !this.playerFolded && this.playerChips > 0 ? 1 : 0;
+    return fundedOpps + playerFunded;
   }
 
   private saveOpponentsToLedger(): void {
@@ -514,6 +615,7 @@ export class PokerGameEngine {
         seat: TABLE_SEATS[idx]!,
         chips: saved ? saved.chips : this.defaultOpponentChips,
         handContribution: 0,
+        streetContribution: 0,
         totalPotWon: saved ? saved.totalPotWon : 0,
         handsWon: saved ? saved.handsWon : 0,
         cards: null,
@@ -539,15 +641,28 @@ export class PokerGameEngine {
     return this.opponents.filter((opp) => !opp.folded);
   }
 
-  private getLegalPlayerBetAmount(streetBet: number): number {
-    return Math.max(0, Math.min(this.playerChips, streetBet));
+  private getPlayerToCall(): number {
+    return Math.max(0, this.currentStreetHighBet - this.playerStreetContribution);
   }
 
   private getLegalPlayerCallAmount(): number {
-    return Math.max(0, Math.min(this.playerChips, this.currentStreetWager));
+    return Math.max(0, Math.min(this.playerChips, this.getPlayerToCall()));
   }
 
-  private serializeOpponent(opp: InternalOpponent): OpponentData {
+  private getLegalPlayerBetOrRaiseCost(streetBet: number): number {
+    if (this.streetHasRaise) return 0;
+    const fundedOpps = this.getActiveOpponents().filter((o) => o.chips > 0).length;
+    if (fundedOpps === 0) return 0;
+    const toCall = this.getPlayerToCall();
+    if (this.playerChips <= toCall) return 0;
+    const targetStreetTotal = this.currentStreetHighBet + streetBet;
+    const desiredAdditional = Math.max(0, targetStreetTotal - this.playerStreetContribution);
+    return Math.max(0, Math.min(this.playerChips, desiredAdditional));
+  }
+
+  private serializeOpponent(opp: InternalOpponent, oppIndex: number): OpponentData {
+    const seatIndex = oppIndex + 1;
+    const position = this.getSeatPosition(seatIndex);
     const cards: CardData[] = opp.cards
       ? opp.cardsHidden
         ? [{ ...HIDDEN_CARD_DATA }, { ...HIDDEN_CARD_DATA }]
@@ -561,6 +676,9 @@ export class PokerGameEngine {
       title: opp.profile.title,
       emoji: opp.profile.emoji,
       seat: opp.seat,
+      position,
+      positionLabel: TABLE_POSITION_LABELS[position],
+      isButton: seatIndex === this.buttonSeatIndex,
       chips: opp.chips,
       handContribution: opp.handContribution,
       totalPotWon: opp.totalPotWon,
@@ -594,9 +712,10 @@ export class PokerGameEngine {
       }
     }
 
-    const serializedOpponents = this.opponents.map((opp) => this.serializeOpponent(opp));
-    const primary = this.getPrimaryOpponent();
-    const primarySerialized = this.serializeOpponent(primary);
+    const serializedOpponents = this.opponents.map((opp, idx) => this.serializeOpponent(opp, idx));
+    const primaryIdx = this.opponents[2] ? 2 : 0;
+    const primary = this.opponents[primaryIdx] ?? this.getPrimaryOpponent();
+    const primarySerialized = this.serializeOpponent(primary, primaryIdx);
     const anyRevealed = this.opponents.some((opp) => !opp.cardsHidden);
     const legacyReaction: SerializedGameState['opponentReaction'] =
       primary.reaction === 'folded' ? 'defeated' : primary.reaction;
@@ -615,8 +734,10 @@ export class PokerGameEngine {
       this.stage === 'player_response'
         ? this.getLegalPlayerCallAmount()
         : this.stage === 'player_action'
-          ? this.getLegalPlayerBetAmount(streetBet)
+          ? this.getLegalPlayerBetOrRaiseCost(streetBet)
           : streetBet;
+
+    const playerPosition = this.getSeatPosition(0);
 
     return {
       tableInstanceId: this.tableInstanceId,
@@ -626,9 +747,17 @@ export class PokerGameEngine {
       mode: this.mode,
       streetIndex: this.streetIndex,
       streetName: STREETS[this.streetIndex]?.name ?? 'Showdown',
+      buttonSeatIndex: this.buttonSeatIndex,
+      playerPosition,
+      playerPositionLabel: TABLE_POSITION_LABELS[playerPosition],
+      smallBlind: this.smallBlind,
+      bigBlind: this.bigBlind,
       currentBet: effectiveCurrentBet,
       pot: this.pot,
       turnStartPot: this.turnStartPot,
+      turnStartPlayerChips: this.turnStartPlayerChips,
+      turnStartPlayerContribution: this.turnStartPlayerContribution,
+      turnStartOpponents: this.turnStartOpponents,
       turnEvents: this.turnEvents,
       playerChips: this.playerChips,
       playerHandContribution: this.playerHandContribution,
@@ -677,6 +806,9 @@ export class PokerGameEngine {
       actionBadge: opp.lastAction ?? '',
       reaction: opp.reaction,
       folded: opp.folded,
+      ...(opp.folded && opp.cards
+        ? { revealedCards: [cardToData(opp.cards[0]), cardToData(opp.cards[1])] }
+        : {}),
       chipsAfter: opp.chips,
       handContributionAfter: opp.handContribution,
       potAfter: this.pot,
@@ -701,7 +833,7 @@ export class PokerGameEngine {
     }
     const action = rawAction.trim().toLowerCase();
     this.turnEvents = [];
-    this.turnStartPot = this.pot;
+    this.captureTurnStartSnapshot();
 
     // Restrict opening/changing opponent roster strictly to between hands (never mid-hand or after cash out)
     if (action === 'open_opponent_select') {
@@ -794,222 +926,94 @@ export class PokerGameEngine {
       throw new Error(`Invalid difficulty: ${action}. Expected easy, medium, or hard.`);
     }
 
-    if (this.stage === 'player_action') {
+    if (this.stage === 'player_action' || this.stage === 'player_response') {
       const currentStreet = STREETS[this.streetIndex];
       if (!currentStreet || !this.playerCards || !this.mode) {
         throw new Error('Game state corrupted.');
       }
 
+      const toCall = this.getPlayerToCall();
+
       if (action === 'fold') {
-        this.handlePlayerFold(false);
-        this.stateRevision += 1;
-        return this.getState();
-      }
-
-      if (action === 'bet') {
-        const betAmt = this.getLegalPlayerBetAmount(currentStreet.bet);
-        if (betAmt <= 0) {
-          throw new Error('Insufficient chips to bet; please check or fold.');
-        }
-        const isAllIn = betAmt < currentStreet.bet || this.playerChips - betAmt === 0;
-        this.pot += betAmt;
-        this.playerChips -= betAmt;
-        this.playerHandContribution += betAmt;
-        this.currentStreetWager = betAmt;
-        this.turnStartPot = this.pot;
-        this.lastAction = { actor: 'player', action: 'bet', amount: betAmt };
-        this.narrative.push({
-          speaker: 'You',
-          text: isAllIn ? `You go all-in for $${betAmt}.` : `You bet $${betAmt}.`,
-        });
-
-        const callers: string[] = [];
-        const folders: string[] = [];
-
-        for (const opp of this.getActiveOpponents()) {
-          if (!opp.cards) continue;
-          if (opp.chips <= 0) {
-            this.checkOpponentAllIn(opp);
-            this.recordTurnEvent(opp, 'check');
-            continue;
-          }
-          const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
-          if (decision === 'fold') {
-            this.foldOpponent(opp);
-            this.recordTurnEvent(opp, 'fold');
-            folders.push(opp.profile.shortName);
-          } else {
-            const paid = this.callOpponent(opp, betAmt);
-            this.recordTurnEvent(opp, 'call', paid);
-            callers.push(opp.profile.shortName);
-          }
-        }
-
-        if (this.getActiveOpponents().length === 0) {
-          this.handleAllOpponentsFold();
-          this.stateRevision += 1;
-          return this.getState();
-        }
-
-        const summaryParts: string[] = [];
-        if (callers.length > 0) summaryParts.push(`${this.formatNameList(callers)} call`);
-        if (folders.length > 0) summaryParts.push(`${this.formatNameList(folders)} fold`);
-        const summaryText =
-          summaryParts.length > 0 ? `${summaryParts.join('; ')}. Pot is $${this.pot}.` : `Pot is $${this.pot}.`;
-        this.dealerSpeech = summaryText;
-        this.narrative.push({ speaker: 'Dealer', text: summaryText });
-        this.lastAction = { actor: 'opponent', action: 'call', amount: betAmt };
-
-        this.advanceStreet();
+        this.playerFolded = true;
+        this.lastAction = { actor: 'player', action: 'fold' };
+        this.narrative.push({ speaker: 'You', text: 'You folded.' });
+        this.processStreetQueue(false);
         this.stateRevision += 1;
         return this.getState();
       }
 
       if (action === 'check') {
-        this.turnStartPot = this.pot;
-        this.currentStreetWager = 0;
+        if (toCall > 0) {
+          throw new Error(`Cannot check while facing a $${toCall} bet; please call, raise, or fold.`);
+        }
         this.lastAction = { actor: 'player', action: 'check' };
         this.narrative.push({ speaker: 'You', text: 'You check.' });
-
-        const active = this.getActiveOpponents();
-        let bettor: InternalOpponent | null = null;
-        let streetWager = 0;
-        const checkedBeforeBet: InternalOpponent[] = [];
-        const callers: string[] = [];
-        const folders: string[] = [];
-        const streetBet = currentStreet.bet;
-
-        for (const opp of active) {
-          if (!opp.cards) continue;
-          if (!bettor) {
-            const canBet = opp.chips > 0;
-            const decision = canBet ? decideAction(this.mode, opp.cards, this.board, false, this.random) : 'check';
-            if (decision === 'bet' && canBet) {
-              const actualBet = Math.min(opp.chips, streetBet);
-              bettor = opp;
-              streetWager = actualBet;
-              opp.chips -= actualBet;
-              opp.handContribution += actualBet;
-              this.pot += actualBet;
-              opp.lastAction = actualBet < streetBet ? `All-in $${actualBet}` : `Bets $${actualBet}`;
-              opp.reaction = 'confident';
-              opp.speech = opp.profile.betLine(actualBet);
-              this.narrative.push({ speaker: opp.profile.shortName, text: `Bets $${actualBet}.` });
-              this.recordTurnEvent(opp, 'bet', actualBet);
-            } else {
-              opp.lastAction = opp.chips === 0 ? 'All-in' : 'Checks';
-              opp.reaction = 'neutral';
-              opp.speech = opp.profile.checkLine;
-              checkedBeforeBet.push(opp);
-              this.recordTurnEvent(opp, 'check');
-            }
-          } else {
-            if (opp.chips <= 0) {
-              this.checkOpponentAllIn(opp);
-              this.recordTurnEvent(opp, 'check');
-              continue;
-            }
-            const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
-            if (decision === 'fold') {
-              this.foldOpponent(opp);
-              this.recordTurnEvent(opp, 'fold');
-              folders.push(opp.profile.shortName);
-            } else {
-              const paid = this.callOpponent(opp, streetWager);
-              this.recordTurnEvent(opp, 'call', paid);
-              callers.push(opp.profile.shortName);
-            }
-          }
-        }
-
-        if (bettor) {
-          for (const opp of checkedBeforeBet) {
-            if (!opp.cards) continue;
-            if (opp.chips <= 0) {
-              this.checkOpponentAllIn(opp);
-              this.recordTurnEvent(opp, 'check');
-              continue;
-            }
-            const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
-            if (decision === 'fold') {
-              this.foldOpponent(opp);
-              this.recordTurnEvent(opp, 'fold');
-              folders.push(opp.profile.shortName);
-            } else {
-              const paid = this.callOpponent(opp, streetWager);
-              this.recordTurnEvent(opp, 'call', paid);
-              callers.push(opp.profile.shortName);
-            }
-          }
-
-          this.currentBettorName = bettor.profile.name;
-          this.currentStreetWager = streetWager;
-          this.lastAction = { actor: 'opponent', action: 'bet', amount: streetWager };
-          const parts = [`${bettor.profile.shortName} bets $${streetWager}`];
-          if (callers.length > 0) parts.push(`${this.formatNameList(callers)} call`);
-          if (folders.length > 0) parts.push(`${this.formatNameList(folders)} fold`);
-          this.dealerSpeech = `${parts.join('; ')}. Your response?`;
-
-          // If player is already all-in ($0 chips), they automatically stay in to next street without overdrawing!
-          if (this.playerChips <= 0) {
-            this.narrative.push({ speaker: 'You', text: 'You are already all-in and stay in the hand.' });
-            this.advanceStreet();
-            this.stateRevision += 1;
-            return this.getState();
-          }
-
-          this.stage = 'player_response';
-          this.stateRevision += 1;
-          return this.getState();
-        }
-
-        this.lastAction = { actor: 'opponent', action: 'check' };
-        this.dealerSpeech = 'Everyone checks around the table.';
-        this.narrative.push({ speaker: 'Dealer', text: 'All active players check.' });
-
-        this.advanceStreet();
-        this.stateRevision += 1;
-        return this.getState();
-      }
-
-      throw new Error(`Invalid action: ${action}. Expected check, bet, or fold.`);
-    }
-
-    if (this.stage === 'player_response') {
-      const currentStreet = STREETS[this.streetIndex];
-      if (!currentStreet || !this.playerCards || !this.mode) {
-        throw new Error('Game state corrupted.');
-      }
-
-      if (action === 'fold') {
-        this.handlePlayerFold(true);
+        this.captureTurnStartSnapshot();
+        this.processStreetQueue(true);
         this.stateRevision += 1;
         return this.getState();
       }
 
       if (action === 'call') {
+        if (toCall <= 0) {
+          throw new Error('No bet to call; please check, bet, or fold.');
+        }
         const callAmt = this.getLegalPlayerCallAmount();
-        const isAllIn = callAmt < this.currentStreetWager || this.playerChips - callAmt === 0;
+        const isAllIn = callAmt < toCall || this.playerChips - callAmt === 0;
         this.pot += callAmt;
         this.playerChips -= callAmt;
         this.playerHandContribution += callAmt;
-        this.currentBettorName = null;
-        this.currentStreetWager = 0;
+        this.playerStreetContribution += callAmt;
         this.lastAction = { actor: 'player', action: 'call', amount: callAmt };
-        this.dealerSpeech = isAllIn
-          ? `You call all-in for $${callAmt}. Pot is $${this.pot}.`
-          : `You call $${callAmt}. Pot is $${this.pot}.`;
         this.narrative.push({
           speaker: 'You',
           text: isAllIn ? `You call all-in for $${callAmt}.` : `You call $${callAmt}.`,
         });
-
-        this.advanceStreet();
+        this.captureTurnStartSnapshot();
+        this.processStreetQueue(true);
         this.stateRevision += 1;
         return this.getState();
       }
 
-      throw new Error(`Invalid response: ${action}. Expected call or fold.`);
+      if (action === 'bet' || action === 'raise') {
+        const betCost = this.getLegalPlayerBetOrRaiseCost(currentStreet.bet);
+        if (betCost <= 0) {
+          throw new Error('Cannot bet or raise right now; please check, call, or fold.');
+        }
+        const isRaise = toCall > 0;
+        const isAllIn = this.playerChips - betCost === 0;
+        this.pot += betCost;
+        this.playerChips -= betCost;
+        this.playerHandContribution += betCost;
+        this.playerStreetContribution += betCost;
+
+        if (this.playerStreetContribution > this.currentStreetHighBet) {
+          this.currentStreetHighBet = this.playerStreetContribution;
+          this.streetHasRaise = true;
+          this.currentBettorName = 'You';
+          // Re-queue all other active funded seats clockwise after seat 0
+          this.streetActionQueue = [1, 2, 3, 4];
+        }
+
+        this.lastAction = { actor: 'player', action: 'bet', amount: betCost };
+        const actionDesc = isAllIn
+          ? `You go all-in for $${betCost}.`
+          : isRaise
+            ? `You raise to $${this.playerStreetContribution} (+$${betCost}).`
+            : `You bet $${betCost}.`;
+        this.narrative.push({ speaker: 'You', text: actionDesc });
+        this.captureTurnStartSnapshot();
+        this.processStreetQueue(true);
+        this.stateRevision += 1;
+        return this.getState();
+      }
+
+      throw new Error(
+        toCall > 0
+          ? `Invalid response: ${action}. Expected call, bet/raise, or fold.`
+          : `Invalid action: ${action}. Expected check, bet, or fold.`,
+      );
     }
 
     if (this.stage === 'hand_over') {
@@ -1045,11 +1049,12 @@ export class PokerGameEngine {
     this.mode = null;
     this.stage = 'select_opponents';
     this.streetIndex = 0;
+    this.buttonSeatIndex = this.initialButtonSeatIndex;
     this.pot = 0;
-    this.turnStartPot = 0;
     this.turnEvents = [];
     this.playerChips = this.defaultPlayerChips;
     this.playerHandContribution = 0;
+    this.playerStreetContribution = 0;
     this.playerTotalPotWon = 0;
     this.playerHandsWon = 0;
     this.playerFolded = false;
@@ -1060,12 +1065,15 @@ export class PokerGameEngine {
     this.handCount = 0;
     this.lastAction = null;
     this.currentBettorName = null;
-    this.currentStreetWager = 0;
+    this.currentStreetHighBet = 0;
+    this.streetHasRaise = false;
+    this.streetActionQueue = [];
     this.dealerSpeech = 'New session! Choose 4 opponents to join your table.';
 
     for (const opp of this.opponents) {
       opp.chips = this.defaultOpponentChips;
       opp.handContribution = 0;
+      opp.streetContribution = 0;
       opp.totalPotWon = 0;
       opp.handsWon = 0;
       opp.cards = null;
@@ -1077,6 +1085,7 @@ export class PokerGameEngine {
       opp.rank = null;
     }
 
+    this.captureTurnStartSnapshot();
     this.narrative = [
       { speaker: 'Dealer', text: 'New session started! Select 4 opponents from the roster to begin.' },
     ];
@@ -1084,33 +1093,56 @@ export class PokerGameEngine {
 
   private foldOpponent(opp: InternalOpponent): void {
     opp.folded = true;
-    opp.cardsHidden = true;
+    opp.cardsHidden = false; // Reveal folded opponent's cards immediately upon folding
+    if (opp.cards && this.board.length >= 3) {
+      opp.rank = evaluateHand([...opp.cards, ...this.board]);
+    }
     opp.lastAction = 'Folded';
     opp.reaction = 'folded';
     opp.speech = opp.profile.foldLine;
     this.narrative.push({ speaker: opp.profile.shortName, text: 'Folds.' });
   }
 
-  private callOpponent(opp: InternalOpponent, targetWager: number): number {
-    const paid = Math.max(0, Math.min(opp.chips, targetWager));
+  private callOpponent(opp: InternalOpponent, additionalToCall: number): number {
+    const paid = Math.max(0, Math.min(opp.chips, additionalToCall));
     opp.chips -= paid;
     opp.handContribution += paid;
+    opp.streetContribution += paid;
     this.pot += paid;
-    opp.lastAction = paid < targetWager ? `All-in $${paid}` : `Calls $${paid}`;
+    opp.lastAction = paid < additionalToCall ? `All-in $${paid}` : `Calls $${paid}`;
     opp.reaction = 'confident';
     opp.speech = opp.profile.callLine(paid);
     this.narrative.push({
       speaker: opp.profile.shortName,
-      text: paid < targetWager ? `Calls all-in for $${paid}.` : `Calls $${paid}.`,
+      text: paid < additionalToCall ? `Calls all-in for $${paid}.` : `Calls $${paid}.`,
     });
     return paid;
   }
 
-  private checkOpponentAllIn(opp: InternalOpponent): void {
-    opp.lastAction = 'All-in';
-    opp.reaction = 'confident';
-    opp.speech = opp.profile.checkLine;
-    this.narrative.push({ speaker: opp.profile.shortName, text: 'Is already all-in.' });
+  private postBlind(seatIndex: number, blindAmount: number, label: 'SB' | 'BB'): number {
+    if (blindAmount <= 0) return 0;
+    if (seatIndex === 0) {
+      const posted = Math.max(0, Math.min(this.playerChips, blindAmount));
+      this.playerChips -= posted;
+      this.playerHandContribution += posted;
+      this.playerStreetContribution += posted;
+      this.pot += posted;
+      return posted;
+    }
+    const opp = this.opponents[seatIndex - 1];
+    if (!opp) return 0;
+    const posted = Math.max(0, Math.min(opp.chips, blindAmount));
+    opp.chips -= posted;
+    opp.handContribution += posted;
+    opp.streetContribution += posted;
+    this.pot += posted;
+    opp.lastAction = posted < blindAmount ? `${label} All-in $${posted}` : `${label} $${posted}`;
+    return posted;
+  }
+
+  private getSeatDisplayName(seatIndex: number): string {
+    if (seatIndex === 0) return 'You';
+    return this.opponents[seatIndex - 1]?.profile.name ?? 'Opponent';
   }
 
   private formatNameList(names: string[]): string {
@@ -1135,10 +1167,13 @@ export class PokerGameEngine {
       }
     }
 
+    // Rotate table positions clockwise by 1 seat on every new hand so BTN/SB/BB/UTG/CO are fair for everyone
+    this.buttonSeatIndex = this.handCount === 0 ? this.initialButtonSeatIndex : (this.buttonSeatIndex + 1) % 5;
     this.handCount += 1;
     this.deck = this.deckFactory();
     this.playerCards = [this.deck.draw(), this.deck.draw()];
     this.playerHandContribution = 0;
+    this.playerStreetContribution = 0;
     this.playerFolded = false;
 
     for (const opp of this.opponents) {
@@ -1146,6 +1181,7 @@ export class PokerGameEngine {
       opp.cardsHidden = true;
       opp.folded = false;
       opp.handContribution = 0;
+      opp.streetContribution = 0;
       opp.lastAction = null;
       opp.reaction = 'neutral';
       opp.speech = '';
@@ -1155,19 +1191,43 @@ export class PokerGameEngine {
     this.board = [];
     this.streetIndex = 0;
     this.pot = 0;
-    this.turnStartPot = 0;
-    this.currentStreetWager = 0;
     this.outcome = null;
     this.lastAction = null;
     this.currentBettorName = null;
-    this.stage = 'player_action';
+    this.currentStreetHighBet = 0;
+    this.streetHasRaise = false;
+    this.turnEvents = [];
 
-    const currentStreet = STREETS[0];
-    this.dealerSpeech = `Hand #${this.handCount}. Cards dealt to all 5 seats. Pre-flop action is on you.`;
+    const sbSeat = (this.buttonSeatIndex + 1) % 5;
+    const bbSeat = (this.buttonSeatIndex + 2) % 5;
+    const utgSeat = (this.buttonSeatIndex + 3) % 5;
+    const sbPosted = this.postBlind(sbSeat, this.smallBlind, 'SB');
+    const bbPosted = this.postBlind(bbSeat, this.bigBlind, 'BB');
+    this.currentStreetHighBet = Math.max(sbPosted, bbPosted);
+    if (bbPosted > 0) {
+      this.currentBettorName = this.getSeatDisplayName(bbSeat);
+    } else if (sbPosted > 0) {
+      this.currentBettorName = this.getSeatDisplayName(sbSeat);
+    }
+
+    const playerPos = this.getSeatPosition(0);
+    const sbName = this.getSeatDisplayName(sbSeat);
+    const bbName = this.getSeatDisplayName(bbSeat);
+    const blindsText =
+      sbPosted > 0 || bbPosted > 0 ? ` ${sbName} posts SB ($${sbPosted}), ${bbName} posts BB ($${bbPosted}).` : '';
+
+    this.dealerSpeech = `Hand #${this.handCount} (You: ${playerPos}).${blindsText}`;
     this.narrative.push({
       speaker: 'Dealer',
-      text: `--- Hand #${this.handCount} (Pre-flop, bet: $${currentStreet.bet}) ---`,
+      text: `--- Hand #${this.handCount} (BTN: ${this.getSeatDisplayName(this.buttonSeatIndex)}, You: ${playerPos}).${blindsText} ---`,
     });
+
+    // Capture post-blind / pre-turn snapshot so UI live pots start cleanly with posted blinds
+    this.captureTurnStartSnapshot();
+
+    // Pre-flop action order starts clockwise from UTG: [UTG, CO, BTN, SB, BB]
+    this.streetActionQueue = this.buildStreetOrder(utgSeat);
+    this.processStreetQueue(true);
   }
 
   private dealNextCommunityCards(streetIdx: number): void {
@@ -1226,171 +1286,218 @@ export class PokerGameEngine {
     return { seatId: top.id, seatName: top.name, amount: excess };
   }
 
-  private advanceStreet(): void {
-    // Settle any uncalled excess wager from the street that just closed before advancing
-    this.refundUncalledExcess();
+  private runSingleOpponentTurn(opp: InternalOpponent, seatIndex: number, recordEvents: boolean): void {
+    if (!opp.cards || !this.mode) return;
+    const currentStreet = STREETS[this.streetIndex];
+    const streetBet = currentStreet?.bet ?? 10;
+    const toCall = Math.max(0, this.currentStreetHighBet - opp.streetContribution);
+    const facingBet = toCall > 0;
 
-    const activeOppsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
-    const playerFunded = !this.playerFolded && this.playerChips > 0;
-    const fundedActiveSeats = activeOppsWithChips.length + (playerFunded ? 1 : 0);
-    const playerAllIn = !this.playerFolded && this.playerChips <= 0;
-
-    // Run out remaining streets without prompting the player whenever:
-    //  (a) the player is committed all-in (0 chips remaining), OR
-    //  (b) at most 1 active seat has chips remaining (no opponent can call any further wager).
-    if (playerAllIn || fundedActiveSeats <= 1) {
-      while (this.streetIndex < STREETS.length - 1) {
-        this.streetIndex += 1;
-        this.currentStreetWager = 0;
-        for (const opp of this.opponents) {
-          opp.speech = '';
-          if (!opp.folded) opp.lastAction = null;
-        }
-        this.dealNextCommunityCards(this.streetIndex);
-        const street = STREETS[this.streetIndex];
-        if (street) {
-          const cardsText =
-            this.streetIndex === 1
-              ? this.board.map((c) => c.toString()).join(', ')
-              : (this.board[this.board.length - 1]?.toString() ?? '');
-          const runoutNote = playerAllIn ? 'You are all-in.' : 'No further betting possible.';
-          this.narrative.push({
-            speaker: 'Dealer',
-            text: `${street.name} dealt: [${cardsText}]. ${runoutNote}`,
-          });
-          const oppsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
-          if (oppsWithChips.length >= 2) {
-            this.runOpponentsOnlyStreet(street.bet, true);
-            this.refundUncalledExcess();
-          }
-        }
+    if (facingBet) {
+      const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
+      if (decision === 'fold') {
+        this.foldOpponent(opp);
+        if (recordEvents) this.recordTurnEvent(opp, 'fold');
+        return;
       }
-      this.finishShowdown();
+
+      // Allow pre-flop raise if no voluntary raise has happened yet and another active seat has chips
+      const canRaise =
+        !this.streetHasRaise &&
+        this.streetIndex === 0 &&
+        opp.chips > toCall &&
+        this.countFundedActiveSeats() > 1;
+      if (canRaise && decideAction(this.mode, opp.cards, this.board, false, this.random) === 'bet') {
+        const targetTotal = this.currentStreetHighBet + streetBet;
+        const additional = Math.min(opp.chips, targetTotal - opp.streetContribution);
+        opp.chips -= additional;
+        opp.handContribution += additional;
+        opp.streetContribution += additional;
+        this.pot += additional;
+        this.currentStreetHighBet = opp.streetContribution;
+        this.streetHasRaise = true;
+        this.currentBettorName = opp.profile.name;
+        opp.lastAction =
+          opp.chips === 0 ? `All-in $${additional}` : `Raises to $${opp.streetContribution}`;
+        opp.reaction = 'confident';
+        opp.speech = opp.profile.betLine(opp.streetContribution);
+        this.narrative.push({
+          speaker: opp.profile.shortName,
+          text: `Raises to $${opp.streetContribution}.`,
+        });
+        if (recordEvents) this.recordTurnEvent(opp, 'bet', additional);
+        // Re-queue all other seats clockwise after this raiser
+        this.streetActionQueue = this.buildStreetOrder((seatIndex + 1) % 5).filter((s) => s !== seatIndex);
+        return;
+      }
+
+      const paid = this.callOpponent(opp, toCall);
+      if (recordEvents) this.recordTurnEvent(opp, 'call', paid);
       return;
     }
 
-    this.streetIndex += 1;
-    this.currentStreetWager = 0;
+    // Not facing a bet (toCall === 0)
+    const canBet = !this.streetHasRaise && opp.chips > 0 && this.countFundedActiveSeats() > 1;
+    const decision = canBet ? decideAction(this.mode, opp.cards, this.board, false, this.random) : 'check';
+    if (decision === 'bet' && canBet) {
+      const actualBet = Math.min(opp.chips, streetBet);
+      opp.chips -= actualBet;
+      opp.handContribution += actualBet;
+      opp.streetContribution += actualBet;
+      this.pot += actualBet;
+      this.currentStreetHighBet = opp.streetContribution;
+      this.streetHasRaise = true;
+      this.currentBettorName = opp.profile.name;
+      opp.lastAction = opp.chips === 0 ? `All-in $${actualBet}` : `Bets $${actualBet}`;
+      opp.reaction = 'confident';
+      opp.speech = opp.profile.betLine(actualBet);
+      this.narrative.push({ speaker: opp.profile.shortName, text: `Bets $${actualBet}.` });
+      if (recordEvents) this.recordTurnEvent(opp, 'bet', actualBet);
+      this.streetActionQueue = this.buildStreetOrder((seatIndex + 1) % 5).filter((s) => s !== seatIndex);
+    } else {
+      opp.lastAction = opp.chips === 0 ? 'All-in' : 'Checks';
+      opp.reaction = 'neutral';
+      opp.speech = opp.profile.checkLine;
+      if (recordEvents) this.recordTurnEvent(opp, 'check');
+    }
+  }
 
+  /**
+   * Unified clockwise action-queue processor for every street.
+   * Pauses whenever it reaches Seat 0 (Player) with a legal decision; otherwise runs
+   * opponents in positional order and advances streets automatically until settlement.
+   */
+  private processStreetQueue(recordEvents: boolean): void {
+    while (this.streetActionQueue.length > 0) {
+      if (this.countActiveSeats() <= 1) {
+        this.finishUncontestedHand();
+        return;
+      }
+
+      const seatIdx = this.streetActionQueue.shift()!;
+      if (!this.isSeatActive(seatIdx)) continue;
+      if (this.getSeatChips(seatIdx) <= 0) continue;
+
+      const toCall = Math.max(0, this.currentStreetHighBet - this.getSeatStreetContribution(seatIdx));
+      if (toCall === 0 && this.countFundedActiveSeats() <= 1) {
+        continue;
+      }
+
+      if (seatIdx === 0) {
+        const street = STREETS[this.streetIndex];
+        const playerPos = this.getSeatPosition(0);
+        if (toCall > 0) {
+          this.stage = 'player_response';
+          const legalCall = this.getLegalPlayerCallAmount();
+          const bettor = this.currentBettorName ?? 'Table';
+          this.dealerSpeech = `${street?.name ?? 'Pre-flop'} (${playerPos}): ${bettor} at $${this.currentStreetHighBet}. $${legalCall} to call.`;
+        } else {
+          this.stage = 'player_action';
+          this.dealerSpeech = `${street?.name ?? 'Pre-flop'} (${playerPos}): Action is on you. Pot is $${this.pot}.`;
+        }
+        return;
+      }
+
+      const opp = this.opponents[seatIdx - 1];
+      if (!opp) continue;
+      this.runSingleOpponentTurn(opp, seatIdx, recordEvents);
+    }
+
+    this.advanceStreet(recordEvents);
+  }
+
+  private finishUncontestedHand(
+    preRefunded: { seatId: string; seatName: string; amount: number } | null = null,
+  ): void {
+    if (!this.playerFolded) {
+      this.handleAllOpponentsFold(preRefunded);
+    } else {
+      this.finishFoldedHand(true);
+    }
+  }
+
+  private advanceStreet(recordEvents = true): void {
+    // Refund any uncalled excess from the closing street before dealing next street or settling
+    const refunded = this.refundUncalledExcess();
+
+    if (this.countActiveSeats() <= 1) {
+      this.finishUncontestedHand(refunded);
+      return;
+    }
+
+    // Clear per-street contributions & old opponent chat bubbles at the start of every new round
+    this.playerStreetContribution = 0;
+    this.currentStreetHighBet = 0;
+    this.streetHasRaise = false;
+    this.currentBettorName = null;
     for (const opp of this.opponents) {
+      opp.streetContribution = 0;
       opp.speech = '';
       if (!opp.folded) {
         opp.lastAction = null;
       }
     }
 
-    if (this.streetIndex === 1) {
-      this.dealNextCommunityCards(1);
-      this.stage = 'player_action';
-      const street = STREETS[1];
-      this.dealerSpeech = `Flop: ${this.board.map((c) => c.toString()).join('  ')}. Bet is $${street.bet}.`;
-      this.narrative.push({
-        speaker: 'Dealer',
-        text: `Flop dealt: [${this.board.map((c) => c.toString()).join(', ')}]. Bet: $${street.bet}.`,
-      });
-      return;
-    }
-
-    if (this.streetIndex === 2) {
-      this.dealNextCommunityCards(2);
-      this.stage = 'player_action';
-      const street = STREETS[2];
-      this.dealerSpeech = `Turn: ${this.board[3]?.toString()}. Bet is $${street.bet}.`;
-      this.narrative.push({
-        speaker: 'Dealer',
-        text: `Turn dealt: [${this.board[3]?.toString()}]. Bet: $${street.bet}.`,
-      });
-      return;
-    }
-
-    if (this.streetIndex === 3) {
-      this.dealNextCommunityCards(3);
-      this.stage = 'player_action';
-      const street = STREETS[3];
-      this.dealerSpeech = `River: ${this.board[4]?.toString()}. Final betting round: $${street.bet}.`;
-      this.narrative.push({
-        speaker: 'Dealer',
-        text: `River dealt: [${this.board[4]?.toString()}]. Bet: $${street.bet}.`,
-      });
-      return;
-    }
-
-    this.finishShowdown();
-  }
-
-  /**
-   * Plays out one betting street among the remaining active opponents (used when the player has folded
-   * or is committed all-in during a multiway runout). Returns true if only 1 active opponent remains.
-   */
-  private runOpponentsOnlyStreet(streetBet: number, recordEvents = false): boolean {
-    const active = this.getActiveOpponents();
-    if (active.length <= 1 || !this.mode) return true;
-
-    let bettor: InternalOpponent | null = null;
-    let streetWager = 0;
-    const checkedBeforeBet: InternalOpponent[] = [];
-
-    for (const opp of active) {
-      if (!opp.cards) continue;
-      if (!bettor) {
-        const canBet = opp.chips > 0;
-        const decision = canBet ? decideAction(this.mode, opp.cards, this.board, false, this.random) : 'check';
-        if (decision === 'bet' && canBet) {
-          const actualBet = Math.min(opp.chips, streetBet);
-          bettor = opp;
-          streetWager = actualBet;
-          opp.chips -= actualBet;
-          opp.handContribution += actualBet;
-          this.pot += actualBet;
-          opp.lastAction = actualBet < streetBet ? `All-in $${actualBet}` : `Bets $${actualBet}`;
-          opp.reaction = 'confident';
-          opp.speech = opp.profile.betLine(actualBet);
-          this.narrative.push({ speaker: opp.profile.shortName, text: `Bets $${actualBet}.` });
-          if (recordEvents) this.recordTurnEvent(opp, 'bet', actualBet);
-        } else {
-          opp.lastAction = opp.chips === 0 ? 'All-in' : 'Checks';
-          opp.reaction = 'neutral';
-          opp.speech = opp.profile.checkLine;
-          checkedBeforeBet.push(opp);
-          if (recordEvents) this.recordTurnEvent(opp, 'check');
-        }
+    // If River just finished -> settle hand!
+    if (this.streetIndex >= STREETS.length - 1) {
+      if (this.playerFolded) {
+        this.finishFoldedHand(false);
       } else {
-        if (opp.chips <= 0) {
-          this.checkOpponentAllIn(opp);
-          if (recordEvents) this.recordTurnEvent(opp, 'check');
-          continue;
-        }
-        const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
-        if (decision === 'fold') {
-          this.foldOpponent(opp);
-          if (recordEvents) this.recordTurnEvent(opp, 'fold');
-        } else {
-          const paid = this.callOpponent(opp, streetWager);
-          if (recordEvents) this.recordTurnEvent(opp, 'call', paid);
-        }
+        this.finishShowdown();
       }
+      return;
     }
 
-    if (bettor) {
-      for (const opp of checkedBeforeBet) {
-        if (!opp.cards) continue;
-        if (opp.chips <= 0) {
-          this.checkOpponentAllIn(opp);
-          if (recordEvents) this.recordTurnEvent(opp, 'check');
-          continue;
-        }
-        const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
-        if (decision === 'fold') {
-          this.foldOpponent(opp);
-          if (recordEvents) this.recordTurnEvent(opp, 'fold');
-        } else {
-          const paid = this.callOpponent(opp, streetWager);
-          if (recordEvents) this.recordTurnEvent(opp, 'call', paid);
-        }
-      }
+    const fundedActiveSeats = this.countFundedActiveSeats();
+    const playerAllIn = !this.playerFolded && this.playerChips <= 0;
+
+    // Deal next street
+    this.streetIndex += 1;
+    this.dealNextCommunityCards(this.streetIndex);
+    const street = STREETS[this.streetIndex];
+    const cardsText =
+      this.streetIndex === 1
+        ? this.board.map((c) => c.toString()).join(', ')
+        : (this.board[this.board.length - 1]?.toString() ?? '');
+    if (street) {
+      const note = this.playerFolded
+        ? 'Remaining opponents act.'
+        : playerAllIn
+          ? 'You are all-in.'
+          : fundedActiveSeats <= 1
+            ? 'No further betting possible.'
+            : `Bet: $${street.bet}.`;
+      this.narrative.push({
+        speaker: 'Dealer',
+        text: `${street.name} dealt: [${cardsText}]. ${note}`,
+      });
     }
 
-    return this.getActiveOpponents().length <= 1;
+    // If <= 1 funded active seat remains, no further betting is possible on this or later streets -> deal out straight to settlement
+    if (fundedActiveSeats <= 1) {
+      while (this.streetIndex < STREETS.length - 1) {
+        this.streetIndex += 1;
+        this.dealNextCommunityCards(this.streetIndex);
+        const s = STREETS[this.streetIndex];
+        if (s) {
+          this.narrative.push({
+            speaker: 'Dealer',
+            text: `${s.name} dealt: [${this.board[this.board.length - 1]?.toString() ?? ''}].`,
+          });
+        }
+      }
+      if (this.playerFolded) {
+        this.finishFoldedHand(false);
+      } else {
+        this.finishShowdown();
+      }
+      return;
+    }
+
+    // Post-flop action starts clockwise left of the Dealer Button: [SB, BB, UTG, CO, BTN]
+    const sbSeat = (this.buttonSeatIndex + 1) % 5;
+    this.streetActionQueue = this.buildStreetOrder(sbSeat);
+    this.processStreetQueue(recordEvents && !this.playerFolded);
   }
 
   /**
@@ -1492,69 +1599,23 @@ export class PokerGameEngine {
     return { payoutById, unmatchedById, slices, bestOverallWinners };
   }
 
-  private handlePlayerFold(currentStreetAlreadyBet: boolean): void {
+  private finishFoldedHand(wonUncontested: boolean): void {
     if (!this.playerCards) return;
 
-    this.playerFolded = true;
-    this.narrative.push({ speaker: 'You', text: 'You folded.' });
+    this.refundUncalledExcess();
 
-    // Keep all opponents' cards strictly hidden when the player folds
+    // Reveal all players' cards once the hand finishes so you can see every hand & the winner's cards
     for (const opp of this.opponents) {
-      opp.cardsHidden = true;
-    }
-
-    // If the player folded before opponents acted on the current street and 2+ opponents are still active,
-    // let the remaining opponents finish this street and play out subsequent streets (ending immediately if 1 remains).
-    if (!currentStreetAlreadyBet && this.getActiveOpponents().length > 1) {
-      const currentStreet = STREETS[this.streetIndex];
-      if (currentStreet) {
-        this.runOpponentsOnlyStreet(currentStreet.bet);
-        this.refundUncalledExcess();
-      }
-    }
-
-    // Advance through remaining streets while 2+ opponents remain active
-    while (this.getActiveOpponents().length > 1 && this.streetIndex < STREETS.length - 1) {
-      this.streetIndex += 1;
-      for (const opp of this.opponents) {
-        opp.speech = '';
-        if (!opp.folded) opp.lastAction = null;
-      }
-      this.dealNextCommunityCards(this.streetIndex);
-      if (this.streetIndex === 1) {
-        this.narrative.push({
-          speaker: 'Dealer',
-          text: `Flop dealt: [${this.board.map((c) => c.toString()).join(', ')}]. Remaining opponents act.`,
-        });
-      } else if (this.streetIndex === 2) {
-        this.narrative.push({
-          speaker: 'Dealer',
-          text: `Turn dealt: [${this.board[3]?.toString()}]. Remaining opponents act.`,
-        });
-      } else if (this.streetIndex === 3) {
-        this.narrative.push({
-          speaker: 'Dealer',
-          text: `River dealt: [${this.board[4]?.toString()}]. Remaining opponents act.`,
-        });
-      }
-
-      const street = STREETS[this.streetIndex];
-      if (street) {
-        const opponentsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
-        if (opponentsWithChips.length >= 2) {
-          this.runOpponentsOnlyStreet(street.bet);
-          this.refundUncalledExcess();
+      if (opp.cards) {
+        opp.cardsHidden = false;
+        if (this.board.length >= 3) {
+          opp.rank = evaluateHand([...opp.cards, ...this.board]);
         }
       }
     }
 
-    // Ensure all opponent hole cards remain hidden because the player folded out
-    for (const opp of this.opponents) {
-      opp.cardsHidden = true;
-    }
-
     const active = this.getActiveOpponents();
-    const wonUncontested = active.length === 1;
+    const isUncontested = wonUncontested || active.length === 1;
     const seats: PotSeat[] = [
       {
         id: 'player',
@@ -1586,15 +1647,23 @@ export class PokerGameEngine {
       winner.reaction = 'celebrating';
       winner.speech = winner.profile.winLine;
       const amt = settlement.payoutById.get(winner.profile.id) ?? 0;
-      winner.lastAction = amt > 0 ? `Wins $${amt}` : 'Wins Pot';
+      winner.lastAction =
+        winner.rank && !isUncontested
+          ? `Wins $${amt} (${winner.rank.name})`
+          : amt > 0
+            ? `Wins $${amt}`
+            : 'Wins Pot';
     }
 
     const winnerNames = potWinners.map((w) => w.profile.name);
     const winnerLabel = this.formatNameList(winnerNames);
+    const winningRank = !isUncontested && potWinners[0]?.rank ? potWinners[0].rank : null;
     const playerRank = this.board.length >= 3 ? evaluateHand([...this.playerCards, ...this.board]) : null;
-    const resolutionDetail = wonUncontested
+    const resolutionDetail = isUncontested
       ? 'as the last player standing'
-      : 'after the remaining seats played out the hand';
+      : winningRank
+        ? `with ${winningRank.name}`
+        : 'after the remaining seats played out the hand';
     const explanation = `You folded! ${winnerLabel} ${potWinners.length > 1 ? 'collected' : 'won'} the $${this.pot} pot ${resolutionDetail}.`;
 
     this.dealerSpeech = explanation;
@@ -1604,17 +1673,21 @@ export class PokerGameEngine {
       result: 'fold',
       pot: this.pot,
       playerRank,
-      opponentRank: null,
+      opponentRank: winningRank,
       winnerNames,
-      message: `You folded. ${winnerLabel} won the $${this.pot} pot.`,
+      message: winningRank
+        ? `You folded. ${winnerLabel} won the $${this.pot} pot with ${winningRank.name}.`
+        : `You folded. ${winnerLabel} won the $${this.pot} pot.`,
     };
 
     this.stage = 'hand_over';
   }
 
-  private handleAllOpponentsFold(): void {
+  private handleAllOpponentsFold(
+    preRefunded: { seatId: string; seatName: string; amount: number } | null = null,
+  ): void {
     // Refund any uncalled excess first so returned bets are NEVER counted as pot winnings
-    const refunded = this.refundUncalledExcess();
+    const refunded = preRefunded ?? this.refundUncalledExcess();
     const refundedAmt = refunded && refunded.seatId === 'player' ? refunded.amount : 0;
     const awardedPot = this.pot;
 
@@ -1678,11 +1751,9 @@ export class PokerGameEngine {
     ];
 
     for (const opp of this.opponents) {
-      if (opp.folded || !opp.cards) {
-        opp.cardsHidden = true;
-        continue;
-      }
-      opp.cardsHidden = false;
+      if (!opp.cards) continue;
+      opp.cardsHidden = false; // Reveal folded & showdown hands at end of hand
+      if (opp.folded) continue;
       const oppFull = [...opp.cards, ...this.board];
       const oppRank = evaluateHand(oppFull);
       opp.rank = oppRank;
@@ -1846,36 +1917,48 @@ export class PokerGameEngine {
 
     if (this.stage === 'player_action') {
       const streetBet = STREETS[this.streetIndex]?.bet ?? 10;
-      const legalBet = this.getLegalPlayerBetAmount(streetBet);
+      const betCost = this.getLegalPlayerBetOrRaiseCost(streetBet);
       const choices: PromptChoice[] = [{ id: 'check', label: 'Check', key: 'C', variant: 'primary' }];
-      if (legalBet > 0) {
-        const betLabel = legalBet < streetBet ? `All-in $${legalBet}` : `Bet $${legalBet}`;
+      if (betCost > 0) {
+        const isAllIn = this.playerChips <= betCost;
+        const betLabel = isAllIn ? `All-in $${betCost}` : `Bet $${betCost}`;
         choices.push({ id: 'bet', label: betLabel, key: 'B', variant: 'default' });
       }
       choices.push({ id: 'fold', label: 'Fold', key: 'F', variant: 'danger' });
 
+      const playerPos = this.getSeatPosition(0);
       return {
         type: 'player_action',
         revision: this.stateRevision,
         token,
-        message: `Your action (${STREETS[this.streetIndex]?.name}):`,
+        message: `Your action (${STREETS[this.streetIndex]?.name} • ${playerPos}):`,
         choices,
       };
     }
 
     if (this.stage === 'player_response') {
+      const streetBet = STREETS[this.streetIndex]?.bet ?? 10;
+      const toCall = this.getPlayerToCall();
       const legalCall = this.getLegalPlayerCallAmount();
-      const bettorLabel = this.currentBettorName ?? 'Opponent';
-      const callLabel = legalCall < this.currentStreetWager ? `All-in $${legalCall}` : `Call $${legalCall}`;
+      const raiseCost = this.getLegalPlayerBetOrRaiseCost(streetBet);
+      const bettorLabel = this.currentBettorName ?? 'Table';
+      const callLabel = legalCall < toCall || legalCall === this.playerChips ? `All-in $${legalCall}` : `Call $${legalCall}`;
+      const choices: PromptChoice[] = [{ id: 'call', label: callLabel, key: 'C', variant: 'primary' }];
+      if (raiseCost > 0) {
+        const targetTotal = this.playerStreetContribution + raiseCost;
+        const raiseLabel =
+          raiseCost === this.playerChips ? `All-in $${raiseCost}` : `Raise to $${targetTotal}`;
+        choices.push({ id: 'bet', label: raiseLabel, key: 'B', variant: 'default' });
+      }
+      choices.push({ id: 'fold', label: 'Fold', key: 'F', variant: 'danger' });
+
+      const playerPos = this.getSeatPosition(0);
       return {
         type: 'player_response',
         revision: this.stateRevision,
         token,
-        message: `${bettorLabel} bet $${this.currentStreetWager}. Your response:`,
-        choices: [
-          { id: 'call', label: callLabel, key: 'C', variant: 'primary' },
-          { id: 'fold', label: 'Fold', key: 'F', variant: 'danger' },
-        ],
+        message: `${STREETS[this.streetIndex]?.name} (${playerPos}) — ${bettorLabel} at $${this.currentStreetHighBet}. Your response:`,
+        choices,
       };
     }
 

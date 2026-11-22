@@ -757,6 +757,7 @@
 
   // DOM Elements
   const elHandCount = document.getElementById('stat-hand-count');
+  const elStatPosition = document.getElementById('stat-position');
   const elDifficulty = document.getElementById('stat-difficulty');
   const elSoundToggle = document.getElementById('sound-toggle');
   const elSoundIcon = document.getElementById('sound-icon');
@@ -779,11 +780,13 @@
 
   const elDealerBubble = document.getElementById('dealer-speech-bubble');
   const elDealerBubbleText = document.getElementById('dealer-bubble-text');
+  const elDealerButton = document.getElementById('dealer-button');
 
   const elPotAmount = document.getElementById('pot-amount');
   const elPotChipsVisual = document.getElementById('pot-chips-visual');
   const elStreetBanner = document.getElementById('street-banner');
 
+  const elPlayerPositionBadge = document.getElementById('player-position-badge');
   const elPlayerChipTag = document.getElementById('player-chip-tag');
   const elPlayerChipsVisual = document.getElementById('player-chips-visual');
   const elPlayerHandRank = document.getElementById('player-hand-rank');
@@ -1005,11 +1008,16 @@
       const thinking = Boolean(ov && ov.thinking);
       const statusClass = thinking ? 'thinking' : folded ? 'folded' : 'active';
 
+      const pos = opp.position || '';
+      const posClass = pos ? `pos-${pos.toLowerCase()}` : '';
+      const posPill = pos ? `<span class="pos-badge pos-badge-sm ${posClass}" title="${opp.positionLabel || pos}">${pos}</span>` : '';
+
       rows.push(`
         <div class="pots-row ${statusClass}">
           <span class="pots-player-name">
             <span class="pots-status-dot ${statusClass}"></span>
             <span>${opp.emoji} ${opp.shortName}</span>
+            ${posPill}
           </span>
           <span class="pots-val in-pot">$${inPot}</span>
           <span class="pots-val won">$${opp.totalPotWon || 0}</span>
@@ -1024,12 +1032,15 @@
         : state.playerHandContribution || 0;
     const playerChips =
       liveOverrides && typeof liveOverrides.playerChips === 'number' ? liveOverrides.playerChips : state.playerChips;
+    const pPos = state.playerPosition || 'BTN';
+    const pPosPill = `<span class="pos-badge pos-badge-sm pos-${pPos.toLowerCase()}" title="${state.playerPositionLabel || pPos}">${pPos}</span>`;
 
     rows.push(`
       <div class="pots-row is-you">
         <span class="pots-player-name">
           <span class="pots-status-dot active"></span>
           <span>👤 You</span>
+          ${pPosPill}
         </span>
         <span class="pots-val in-pot">$${playerInPot}</span>
         <span class="pots-val won">$${state.playerTotalPotWon || 0}</span>
@@ -1058,13 +1069,27 @@
       const art = CHARACTER_ART[opp.id] || CHARACTER_ART.reginald;
       const seatEl = document.getElementById(`seat-${opp.seat}`);
       const feltEl = document.getElementById(`felt-${opp.seat}`);
-      const nameplateEl = document.getElementById(`nameplate-slot-${opp.seat}`);
+      const pos = opp.position || '';
+      const posClass = pos ? `pos-${pos.toLowerCase()}` : '';
 
       if (seatEl) {
         seatEl.dataset.oppId = opp.id;
         seatEl.innerHTML = `
-          <div class="speech-bubble opponent-bubble" id="opp-bubble-${opp.id}">
-            <span class="speech-text" id="opp-bubble-text-${opp.id}"></span>
+          <div class="seat-overhead-stack">
+            <div class="character-nameplate opp-nameplate" data-opp-id="${opp.id}">
+              <div class="nameplate-header-row">
+                <span class="pos-badge ${posClass}" id="opp-pos-${opp.id}" title="${opp.positionLabel || pos}">${pos}</span>
+                <span class="badge-role">${opp.title || 'VIP'}</span>
+              </div>
+              <div>${opp.emoji} ${opp.name}</div>
+              <div class="chip-count-tag" id="opp-chip-tag-${opp.id}">$${opp.chips}</div>
+              <div class="opp-action-badge" id="opp-action-${opp.id}"></div>
+            </div>
+            <div class="speech-bubble-slot">
+              <div class="speech-bubble opponent-bubble" id="opp-bubble-${opp.id}">
+                <span class="speech-text" id="opp-bubble-text-${opp.id}"></span>
+              </div>
+            </div>
           </div>
           <div class="seated-character-wrapper">
             <div class="casino-chair opponent-chair">${art.chairSVG}</div>
@@ -1082,15 +1107,6 @@
         `;
         const chipsHTML = `<div class="chips-stack-visual" id="opp-chips-visual-${opp.id}"></div>`;
         feltEl.innerHTML = opp.seat === 'far-right' ? `${chipsHTML}${cardsHTML}` : `${cardsHTML}${chipsHTML}`;
-      }
-
-      if (nameplateEl) {
-        nameplateEl.dataset.oppId = opp.id;
-        nameplateEl.innerHTML = `
-          <span class="badge-role">${opp.title || 'VIP'}</span> ${opp.emoji} ${opp.name}
-          <div class="chip-count-tag" id="opp-chip-tag-${opp.id}">$${opp.chips}</div>
-          <div class="opp-action-badge" id="opp-action-${opp.id}"></div>
-        `;
       }
     });
   }
@@ -1188,9 +1204,16 @@
     const elBubbleText = document.getElementById(`opp-bubble-text-${opp.id}`);
     const elAvatar = document.getElementById(`opp-avatar-${opp.id}`);
     const elChipTag = document.getElementById(`opp-chip-tag-${opp.id}`);
+    const elPosBadge = document.getElementById(`opp-pos-${opp.id}`);
     const elActionBadge = document.getElementById(`opp-action-${opp.id}`);
     const elChipsVisual = document.getElementById(`opp-chips-visual-${opp.id}`);
     const elCardsContainer = document.getElementById(`opp-cards-container-${opp.id}`);
+
+    if (elPosBadge && opp.position) {
+      elPosBadge.textContent = opp.position;
+      elPosBadge.title = opp.positionLabel || opp.position;
+      elPosBadge.className = `pos-badge pos-${opp.position.toLowerCase()}`;
+    }
 
     if (elContainer) {
       elContainer.classList.remove('is-thinking');
@@ -1316,6 +1339,12 @@
     renderChipsVisual(elChipsVisual, event.chipsAfter);
     if (elCardsContainer) {
       elCardsContainer.classList.toggle('folded', Boolean(event.folded));
+      if (event.folded && Array.isArray(event.revealedCards) && event.revealedCards.length >= 2) {
+        elCardsContainer.innerHTML = `
+          ${renderCardHTML(event.revealedCards[0])}
+          ${renderCardHTML(event.revealedCards[1])}
+        `;
+      }
     }
 
     elPotAmount.textContent = `$${event.potAfter}`;
@@ -1345,10 +1374,45 @@
     if (elBtnConfirmOpps) elBtnConfirmOpps.disabled = true;
   }
 
+  const BUTTON_SEAT_CLASSES = [
+    'btn-at-player',
+    'btn-at-far-left',
+    'btn-at-top-left',
+    'btn-at-top-right',
+    'btn-at-far-right',
+  ];
+
+  function renderTablePositions(state) {
+    const pPos = state.playerPosition || 'BTN';
+    const pLabel = state.playerPositionLabel || pPos;
+    if (elStatPosition) {
+      elStatPosition.textContent = pPos;
+    }
+    if (elPlayerPositionBadge) {
+      elPlayerPositionBadge.textContent = `${pPos} • ${pLabel}`;
+      elPlayerPositionBadge.title = pLabel;
+      elPlayerPositionBadge.className = `pos-badge pos-${pPos.toLowerCase()}`;
+    }
+    if (elDealerButton && typeof state.buttonSeatIndex === 'number') {
+      const seatClass = BUTTON_SEAT_CLASSES[state.buttonSeatIndex] || 'btn-at-player';
+      elDealerButton.className = `dealer-button ${seatClass}`;
+      elDealerButton.title = `Dealer Button (Seat ${state.buttonSeatIndex === 0 ? 'You' : state.buttonSeatIndex})`;
+    }
+    (state.opponents || []).forEach((opp) => {
+      const elPosBadge = document.getElementById(`opp-pos-${opp.id}`);
+      if (elPosBadge && opp.position) {
+        elPosBadge.textContent = opp.position;
+        elPosBadge.title = opp.positionLabel || opp.position;
+        elPosBadge.className = `pos-badge pos-${opp.position.toLowerCase()}`;
+      }
+    });
+  }
+
   async function playTurnSequenceAndRender(nextState, playerAction) {
     if (Array.isArray(nextState.opponents)) {
       mountOpponentSeats(nextState.opponents);
     }
+    renderTablePositions(nextState);
 
     const events = nextState.turnEvents;
     if (!Array.isArray(events) || events.length === 0) {
@@ -1357,48 +1421,100 @@
       return;
     }
 
+    // Close picker modal immediately if opening a hand triggered pre-flop UTG/CO turns
+    if (nextState.stage !== 'select_opponents') {
+      closeOpponentDialog();
+    }
+
     lockActionsDuringTurns('Opponents are making their decisions...');
 
-    const prevBetAmt = currentState ? currentState.currentBet : 0;
-    const startPot = typeof nextState.turnStartPot === 'number' ? nextState.turnStartPot : nextState.pot;
-    const livePots = {
-      pot: startPot,
-      playerChips: currentState ? currentState.playerChips - (playerAction === 'bet' ? prevBetAmt : 0) : nextState.playerChips,
-      playerHandContribution:
-        (currentState ? currentState.playerHandContribution || 0 : 0) + (playerAction === 'bet' ? prevBetAmt : 0),
-      opponents: {},
-    };
-    if (currentState && Array.isArray(currentState.opponents)) {
-      currentState.opponents.forEach((opp) => {
-        livePots.opponents[opp.id] = {
-          chips: opp.chips,
-          handContribution: opp.handContribution || 0,
-          folded: opp.folded,
-          thinking: false,
-        };
+    // If a new hand just started (e.g. clicking Easy or Play Again), clear old bubbles/board & deal player cards right away
+    const isNewHandStart = !currentState || nextState.handCount !== currentState.handCount;
+    if (isNewHandStart) {
+      document.querySelectorAll('.opponent-bubble').forEach((b) => b.classList.remove('active', 'thinking'));
+      elHandCount.textContent = nextState.handCount || 1;
+      elDifficulty.textContent = nextState.mode ? nextState.mode.toUpperCase() : 'Selecting';
+      elStreetBanner.textContent = 'PRE-FLOP';
+      elHudStreetStatus.textContent = 'Street: Pre-flop';
+      elHudStreetStatus.style.color = '';
+      for (let i = 0; i < 5; i++) {
+        const slot = document.getElementById(`slot-${i}`);
+        if (slot) {
+          const labels = ['FLOP 1', 'FLOP 2', 'FLOP 3', 'TURN', 'RIVER'];
+          slot.innerHTML = `<span class="slot-label">${labels[i]}</span>`;
+        }
+      }
+      if (nextState.playerCards && nextState.playerCards.length >= 2) {
+        elPlayerCardsContainer.innerHTML = `
+          ${renderCardHTML(nextState.playerCards[0])}
+          ${renderCardHTML(nextState.playerCards[1])}
+        `;
+      }
+      (nextState.opponents || []).forEach((opp) => {
+        const elCards = document.getElementById(`opp-cards-container-${opp.id}`);
+        if (elCards) {
+          elCards.classList.remove('folded');
+          elCards.innerHTML = `
+            <div class="card card-back"><div class="card-back-pattern"></div></div>
+            <div class="card card-back"><div class="card-back-pattern"></div></div>
+          `;
+        }
       });
     }
 
-    if (playerAction === 'bet') {
+    const startPot = typeof nextState.turnStartPot === 'number' ? nextState.turnStartPot : nextState.pot;
+    const livePots = {
+      pot: startPot,
+      playerChips:
+        typeof nextState.turnStartPlayerChips === 'number'
+          ? nextState.turnStartPlayerChips
+          : nextState.playerChips,
+      playerHandContribution:
+        typeof nextState.turnStartPlayerContribution === 'number'
+          ? nextState.turnStartPlayerContribution
+          : nextState.playerHandContribution || 0,
+      opponents: {},
+    };
+    const snapOpps = nextState.turnStartOpponents || {};
+    (nextState.opponents || []).forEach((opp) => {
+      const snap = snapOpps[opp.id];
+      livePots.opponents[opp.id] = {
+        chips: snap ? snap.chips : opp.chips,
+        handContribution: snap ? snap.handContribution : opp.handContribution || 0,
+        folded: snap ? snap.folded : opp.folded,
+        thinking: false,
+      };
+      const elChipTag = document.getElementById(`opp-chip-tag-${opp.id}`);
+      if (elChipTag) elChipTag.textContent = `$${livePots.opponents[opp.id].chips}`;
+    });
+
+    elPlayerChipTag.textContent = `Your Stack: $${livePots.playerChips}`;
+    renderChipsVisual(elPlayerChipsVisual, livePots.playerChips);
+    elPotAmount.textContent = `$${startPot}`;
+    renderChipsVisual(elPotChipsVisual, startPot);
+
+    if (playerAction === 'bet' || playerAction === 'call') {
       sfx.playChipSound();
-      elPlayerChipTag.textContent = `Your Stack: $${livePots.playerChips}`;
-      renderChipsVisual(elPlayerChipsVisual, livePots.playerChips);
-      elPotAmount.textContent = `$${startPot}`;
-      renderChipsVisual(elPotChipsVisual, startPot);
       elSpeakerName.textContent = 'YOU';
       elSpeakerThumb.textContent = SPEAKER_ICONS.You;
-      elDialogueMainText.textContent = `You bet $${prevBetAmt}. Waiting on the table...`;
+      elDialogueMainText.textContent =
+        playerAction === 'call' ? 'You call. Waiting on the table...' : 'You raise the stakes. Waiting on the table...';
     } else if (playerAction === 'check') {
       sfx.playKnock();
       elSpeakerName.textContent = 'YOU';
       elSpeakerThumb.textContent = SPEAKER_ICONS.You;
       elDialogueMainText.textContent = 'You check. Waiting on the table...';
+    } else if (isNewHandStart) {
+      sfx.playCardDeal();
+      elSpeakerName.textContent = 'DEALER';
+      elSpeakerThumb.textContent = SPEAKER_ICONS.Dealer;
+      elDialogueMainText.textContent = `Hand #${nextState.handCount} (You: ${nextState.playerPosition}). Blinds posted ($${nextState.smallBlind}/$${nextState.bigBlind}).`;
     }
-    if (currentState) renderPotsWindow(currentState, livePots);
+    renderPotsWindow(nextState, livePots);
 
     await delay(350);
 
-    let lastRenderedStreet = currentState ? currentState.streetName : null;
+    let lastRenderedStreet = events[0] && events[0].streetName ? events[0].streetName : (currentState ? currentState.streetName : 'Pre-flop');
 
     for (const event of events) {
       if (event.streetName && lastRenderedStreet && event.streetName !== lastRenderedStreet) {
@@ -1485,11 +1601,12 @@
       elDealerBubble.classList.remove('active');
     }
 
-    // Mount & Render All 4 Seated Opponents
+    // Mount & Render All 4 Seated Opponents + Table Positions
     if (Array.isArray(state.opponents)) {
       mountOpponentSeats(state.opponents);
       state.opponents.forEach(renderOpponent);
     }
+    renderTablePositions(state);
 
     // Update Hidable Table Pots Window
     renderPotsWindow(state);
@@ -1730,13 +1847,14 @@
 
     const availW = Math.max(200, vpRect.width - 12);
     const availH = Math.max(120, vpRect.height - 12);
-    // Projected 3D table spans ~1110px wide; dealer chair top (-78px) to table rail bottom (+450px) spans ~535px tall
-    const scaleX = availW / 1115;
-    const scaleY = availH / 540;
-    const scale = Math.max(0.22, Math.min(1, scaleX, scaleY));
+    // Projected 3D table spans ~1115px wide; overhead stack (name+stack card + speech bubble above dealer at -230px)
+    // to table rail bottom (+450px) spans ~690px tall so chat bubbles & nameplates are NEVER cut off by top-nav!
+    const scaleX = availW / 1140;
+    const scaleY = availH / 700;
+    const scale = Math.max(0.20, Math.min(1, scaleX, scaleY));
 
-    // Shift downward proportionally so dealer's head/chair (-54px..-78px above scene top) never clips at top edge
-    const marginTop = Math.round(62 * scale);
+    // Shift downward proportionally so overhead nameplate + speech bubble above Dealer/Top seats stay well below top-nav
+    const marginTop = Math.round(180 * scale);
     elTableScene.style.transform = `scale(${scale.toFixed(4)})`;
     elTableScene.style.marginTop = `${marginTop}px`;
   }
