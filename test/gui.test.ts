@@ -1168,12 +1168,21 @@ test('HTTP request handler serves state, static files, and handles actions', asy
     /\.pov-perspective-container\s*\{[\s\S]*?z-index:\s*5;/,
     '.pov-perspective-container must stack above .wall-bg and .ceiling decor',
   );
+  assert.ok(cssRes.body.includes('.pots-player-cell'));
+  assert.ok(cssRes.body.includes('.pots-player-label'));
+  assert.ok(cssRes.body.includes('.pots-pos-pill'));
+  assert.match(cssRes.body, /\.pots-pos-pill\s*\{[^}]*flex-shrink:\s*0;/s);
+  assert.match(cssRes.body, /\.pots-player-label\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
+  assert.ok(cssRes.body.includes('min(350px, calc(100vw - 16px))'));
 
   // 5. GET /game.js
   const jsRes = await simulateRequest(handler, { method: 'GET', url: '/game.js' });
   assert.equal(jsRes.statusCode, 200);
   assert.ok(jsRes.body.includes('SoundFX'));
   assert.ok(jsRes.body.includes('CHARACTER_ART'));
+  assert.ok(jsRes.body.includes('pots-player-cell'));
+  assert.ok(jsRes.body.includes('pots-player-label'));
+  assert.ok(jsRes.body.includes('pots-pos-pill'));
   assert.ok(jsRes.body.includes('reginald'));
   assert.ok(jsRes.body.includes('buck'));
   assert.ok(jsRes.body.includes('bruce'));
