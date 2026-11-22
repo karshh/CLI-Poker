@@ -349,13 +349,13 @@
         </svg>`,
     },
 
-    // 4. Elon Musk (Tech Billionaire — unmistakable likeness, swept undercut hair, asymmetric smirk, SpaceX rocket pin & Mars tee)
+    // 4. Elon Musk (Unmistakable likeness: buzzed undercut swept quiff, broad jaw & cheekbones, deep-set squinty eyes, wry smirk, black leather keynote jacket & Occupy Mars / X tee)
     elon: {
       chairSVG: `
         <svg viewBox="0 0 210 250" class="chair-svg" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <linearGradient id="elonFrame" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#334155"/><stop offset="100%" stop-color="#090d16"/>
+              <stop offset="0%" stop-color="#475569"/><stop offset="100%" stop-color="#090d16"/>
             </linearGradient>
             <linearGradient id="elonSeat" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="#1e293b"/><stop offset="55%" stop-color="#0f172a"/><stop offset="100%" stop-color="#020617"/>
@@ -364,7 +364,7 @@
               <stop offset="0%" stop-color="#fb923c"/><stop offset="65%" stop-color="#c2410c"/><stop offset="100%" stop-color="#7c2d12"/>
             </radialGradient>
           </defs>
-          <!-- Futuristic SpaceX / Cybertruck Angular Bucket Seat -->
+          <!-- Futuristic Cybertruck / Dragon Capsule Angular Bucket Seat -->
           <polygon points="34,245 20,90 42,24 105,12 168,24 190,90 176,245" fill="url(#elonFrame)" stroke="#38bdf8" stroke-width="2.2"/>
           <polygon points="44,245 33,92 50,34 105,24 160,34 177,92 166,245" fill="url(#elonSeat)" stroke="#64748b" stroke-width="1.4"/>
           <!-- Mini Red Planet Mars Crest on Headrest -->
@@ -378,67 +378,156 @@
       avatarSVG: `
         <svg viewBox="0 0 180 230" class="character-svg" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <linearGradient id="elonJacket" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#27272a"/><stop offset="100%" stop-color="#09090b"/>
+            <linearGradient id="elonLeather" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#353944"/>
+              <stop offset="45%" stop-color="#191b22"/>
+              <stop offset="100%" stop-color="#090a0e"/>
             </linearGradient>
             <linearGradient id="elonSkin" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#fbe3d0"/><stop offset="65%" stop-color="#e9be9f"/><stop offset="100%" stop-color="#d5a483"/>
+              <stop offset="0%" stop-color="#fde5d4"/>
+              <stop offset="55%" stop-color="#f0c8ad"/>
+              <stop offset="100%" stop-color="#d8a586"/>
             </linearGradient>
-            <linearGradient id="elonHair" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#3f2d21"/><stop offset="100%" stop-color="#1c130d"/>
+            <radialGradient id="elonCheek" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#e59a7d" stop-opacity="0.34"/>
+              <stop offset="100%" stop-color="#e59a7d" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="elonHairTop" x1="0" y1="0" x2="0.4" y2="1">
+              <stop offset="0%" stop-color="#624734"/>
+              <stop offset="50%" stop-color="#3d2b1e"/>
+              <stop offset="100%" stop-color="#21160f"/>
             </linearGradient>
+            <linearGradient id="elonUndercut" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#433226"/>
+              <stop offset="100%" stop-color="#78604e" stop-opacity="0.35"/>
+            </linearGradient>
+            <radialGradient id="elonMarsTee" cx="35%" cy="35%" r="65%">
+              <stop offset="0%" stop-color="#fb923c"/>
+              <stop offset="60%" stop-color="#c2410c"/>
+              <stop offset="100%" stop-color="#7c2d12"/>
+            </radialGradient>
           </defs>
-          <!-- Sleek Keynote Black Blazer -->
-          <path d="M 16 162 Q 90 147 164 162 L 176 230 L 4 230 Z" fill="url(#elonJacket)" />
-          <!-- Black Crewneck "OCCUPY MARS / X" Tee -->
-          <polygon points="68,151 112,151 106,226 74,226" fill="#0c0c0f" />
-          <path d="M 73 151 Q 90 163 107 151" stroke="#3f3f46" stroke-width="1.5" fill="none"/>
-          <!-- Iconic Mars Graphic + X on Tee -->
-          <circle cx="90" cy="186" r="13" fill="#c2410c" opacity="0.9"/>
-          <path d="M 80 182 Q 90 177 100 184" stroke="#fb923c" stroke-width="2" fill="none" opacity="0.7"/>
-          <text x="90" y="191" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle" font-family="sans-serif">𝕏</text>
-          <text x="90" y="209" font-size="6.5" font-weight="800" fill="#94a3b8" letter-spacing="1.2" text-anchor="middle" font-family="sans-serif">MARS</text>
-          <!-- Blazer Lapels & Silver SpaceX Rocket Lapel Pin -->
-          <polygon points="56,154 74,154 74,218 50,200" fill="#18181b" stroke="#3f3f46" stroke-width="1"/>
-          <polygon points="124,154 106,154 106,218 130,200" fill="#18181b" stroke="#3f3f46" stroke-width="1"/>
-          <g transform="translate(120 172) rotate(20)">
-            <path d="M 0 -8 Q 3 -2 3 6 L -3 6 Q -3 -2 0 -8 Z" fill="#e2e8f0"/>
-            <polygon points="-3,4 -6,8 -3,7" fill="#38bdf8"/>
-            <polygon points="3,4 6,8 3,7" fill="#38bdf8"/>
-            <polygon points="-1.5,6 1.5,6 0,10" fill="#f97316"/>
+
+          <!-- Broad Shouldered Matte-Black Leather Keynote / Bomber Jacket -->
+          <path d="M 10 164 Q 35 146 64 147 L 116 147 Q 145 146 170 164 L 178 230 L 2 230 Z" fill="url(#elonLeather)" stroke="#474c59" stroke-width="1.2"/>
+          <path d="M 20 165 Q 42 153 60 154" stroke="#646a7a" stroke-width="2" fill="none" opacity="0.5" stroke-linecap="round"/>
+          <path d="M 160 165 Q 138 153 120 154" stroke="#646a7a" stroke-width="2" fill="none" opacity="0.5" stroke-linecap="round"/>
+          <!-- Standing Moto Collar -->
+          <path d="M 60 147 Q 66 137 74 144 L 71 159 L 58 155 Z" fill="#23262e" stroke="#525866" stroke-width="1"/>
+          <path d="M 120 147 Q 114 137 106 144 L 109 159 L 122 155 Z" fill="#23262e" stroke="#525866" stroke-width="1"/>
+
+          <!-- Black Crewneck "OCCUPY MARS / 𝕏" T-Shirt (Raised so Mars + 𝕏 show clearly above table rail!) -->
+          <polygon points="68,147 112,147 107,228 73,228" fill="#09090c"/>
+          <path d="M 72 148 Q 90 158 108 148" stroke="#3f3f46" stroke-width="1.8" fill="none"/>
+          <circle cx="90" cy="171" r="12.5" fill="url(#elonMarsTee)"/>
+          <path d="M 80 168 Q 90 163 100 169" stroke="#fed7aa" stroke-width="1.5" fill="none" opacity="0.55"/>
+          <text x="90" y="176" font-size="13.5" font-weight="900" fill="#ffffff" text-anchor="middle" font-family="sans-serif">𝕏</text>
+          <text x="90" y="193" font-size="6.5" font-weight="900" fill="#e2e8f0" letter-spacing="1.6" text-anchor="middle" font-family="sans-serif">MARS</text>
+
+          <!-- Metallic Leather Jacket Lapels & Silver Zipper -->
+          <polygon points="56,153 72,151 72,226 48,204" fill="#181a20" stroke="#3f434e" stroke-width="1"/>
+          <polygon points="124,153 108,151 108,226 132,204" fill="#181a20" stroke="#3f434e" stroke-width="1"/>
+          <line x1="72" y1="153" x2="72" y2="226" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="2.5 2"/>
+          <line x1="108" y1="153" x2="108" y2="226" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="2.5 2"/>
+          <!-- Silver SpaceX Starship Rocket Pin on Left Lapel -->
+          <g transform="translate(122 169) rotate(22)">
+            <path d="M 0 -9 Q 3.2 -3 3.2 6 L -3.2 6 Q -3.2 -3 0 -9 Z" fill="#f1f5f9" stroke="#64748b" stroke-width="0.6"/>
+            <polygon points="-3.2,3 -6.5,8 -3.2,6.5" fill="#38bdf8"/>
+            <polygon points="3.2,3 6.5,8 3.2,6.5" fill="#38bdf8"/>
+            <polygon points="-1.6,6 1.6,6 0,10.5" fill="#f97316"/>
           </g>
-          <!-- Sturdy Neck -->
-          <rect x="76" y="126" width="28" height="29" rx="5" fill="url(#elonSkin)" />
+
+          <!-- Thick Sturdy Neck & Chin Shadow -->
+          <path d="M 73 125 L 107 125 L 110 150 Q 90 157 70 150 Z" fill="url(#elonSkin)"/>
+          <path d="M 75 130 Q 90 139 105 130 Q 90 144 75 130 Z" fill="#b98362" opacity="0.45"/>
+
           <!-- Ears -->
-          <ellipse cx="59" cy="98" rx="4.5" ry="9" fill="#dfb190" />
-          <ellipse cx="121" cy="98" rx="4.5" ry="9" fill="#dfb190" />
-          <!-- Sculpted Face: Broad Forehead, Defined Cheekbones & Square-Rounded Chin -->
-          <path d="M 61 88 Q 60 56 90 56 Q 120 56 119 88 L 117 110 Q 114 128 90 133 Q 66 128 63 110 Z" fill="url(#elonSkin)" />
-          <!-- Subtle Cheekbone & Jaw Shading -->
-          <path d="M 66 105 Q 72 117 77 121" stroke="#c89471" stroke-width="1.3" fill="none" opacity="0.55"/>
-          <path d="M 114 105 Q 108 117 103 121" stroke="#c89471" stroke-width="1.3" fill="none" opacity="0.55"/>
-          <!-- Iconic Elon Asymmetric Swept Undercut Hair (Short Faded Sides, Tousled Swept Top) -->
-          <path d="M 59 90 Q 56 70 62 58 Q 68 42 94 42 Q 119 42 122 60 Q 124 72 121 90 L 117 82 Q 116 66 108 62 Q 95 58 84 62 Q 72 64 64 78 Z" fill="url(#elonHair)" />
-          <!-- Swept Top Quiff / Wave Detail -->
-          <path d="M 64 56 Q 82 40 116 54" stroke="#574132" stroke-width="3.5" fill="none" stroke-linecap="round"/>
-          <path d="M 70 62 Q 90 49 114 60" stroke="#2c1e15" stroke-width="2" fill="none" stroke-linecap="round"/>
-          <!-- Prominent Brow Ridge & Quizzical Eyebrows -->
-          <path d="M 68 86 Q 76 83 84 86" stroke="#3b281c" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-          <path d="M 96 85 Q 104 81 112 85" stroke="#3b281c" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-          <!-- Characteristic Narrowed / Focused Squinty Eyes -->
-          <path d="M 69 94 Q 76 90 83 94 Q 76 97 69 94 Z" fill="#ffffff"/>
-          <circle cx="76" cy="93.5" r="2.4" fill="#334155"/>
-          <path d="M 68 93 Q 76 89 84 93" stroke="#291d16" stroke-width="1.8" fill="none"/>
-          <path d="M 97 94 Q 104 90 111 94 Q 104 97 97 94 Z" fill="#ffffff"/>
-          <circle cx="104" cy="93.5" r="2.4" fill="#334155"/>
-          <path d="M 96 93 Q 104 89 112 93" stroke="#291d16" stroke-width="1.8" fill="none"/>
-          <!-- Defined Nose -->
-          <path d="M 90 92 L 88 104 Q 90 107 94 104" stroke="#b98360" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-          <!-- Unmistakable Elon Sideways Tight-Lipped Smirk -->
-          <path d="M 77 115 Q 89 117 104 111" stroke="#854d3b" stroke-width="2.3" fill="none" stroke-linecap="round"/>
-          <path d="M 102 109 Q 105 111 104 114" stroke="#b98360" stroke-width="1.2" fill="none" stroke-linecap="round"/>
-          <!-- Subtle Chin Dimple Shadow -->
-          <path d="M 86 125 Q 90 127 94 125" stroke="#c89471" stroke-width="1.4" fill="none" opacity="0.65"/>
+          <path d="M 55 88 Q 50 93 52 103 Q 54 110 59 108 Z" fill="#e2b495" stroke="#c38e6d" stroke-width="0.8"/>
+          <path d="M 125 88 Q 130 93 128 103 Q 126 110 121 108 Z" fill="#e2b495" stroke="#c38e6d" stroke-width="0.8"/>
+
+          <!-- Sculpted Elon Head & Face Geometry:
+               High broad forehead, prominent wide high cheekbones, strong square-rounded jaw & chin -->
+          <path d="
+            M 56 80
+            Q 55 47 90 46
+            Q 125 47 124 80
+            L 124 99
+            Q 124 115 115 126
+            Q 106 136 90 137
+            Q 74 136 65 126
+            Q 56 115 56 99 Z"
+            fill="url(#elonSkin)" stroke="#c79575" stroke-width="0.7"/>
+
+          <!-- Forehead Expression Lines -->
+          <path d="M 72 67 Q 90 65 108 67" stroke="#c99677" stroke-width="0.85" fill="none" opacity="0.42"/>
+          <path d="M 76 72 Q 90 70.5 104 72" stroke="#c99677" stroke-width="0.75" fill="none" opacity="0.32"/>
+
+          <!-- High Rounded Elon Cheekbones & Jaw Contour -->
+          <ellipse cx="69" cy="101" rx="9.5" ry="6.2" fill="url(#elonCheek)"/>
+          <ellipse cx="111" cy="101" rx="9.5" ry="6.2" fill="url(#elonCheek)"/>
+          <path d="M 62 114 Q 70 129 84 134" stroke="#bd8867" stroke-width="1.2" fill="none" opacity="0.45"/>
+          <path d="M 118 114 Q 110 129 96 134" stroke="#bd8867" stroke-width="1.2" fill="none" opacity="0.45"/>
+
+          <!-- Iconic Elon Modern Hairstyle: Tightly Buzzed Faded Undercut Sides + Swept Textured Quiff -->
+          <path d="M 55 91 L 54 68 Q 56 58 63 55 L 63 72 Q 59 79 59 91 Z" fill="url(#elonUndercut)"/>
+          <path d="M 125 91 L 126 68 Q 124 58 117 55 L 117 72 Q 121 79 121 91 Z" fill="url(#elonUndercut)"/>
+          <!-- Textured swept-over top quiff with realistic slightly elevated temples -->
+          <path d="
+            M 56 68
+            Q 54 50 66 40
+            Q 80 30 102 32
+            Q 120 34 125 48
+            Q 127 59 124 70
+            Q 120 60 113 58
+            Q 107 56 105 52
+            Q 93 50 82 55
+            Q 72 59 67 65
+            Q 61 63 56 68 Z"
+            fill="url(#elonHairTop)"/>
+          <!-- Textured diagonal quiff strands & slight silver-brown highlights -->
+          <path d="M 64 46 Q 84 34 116 45" stroke="#85654d" stroke-width="3.2" fill="none" stroke-linecap="round" opacity="0.82"/>
+          <path d="M 70 53 Q 91 42 117 52" stroke="#664b38" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.72"/>
+          <path d="M 78 39 Q 99 34 114 41" stroke="#9e7d63" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.65"/>
+
+          <!-- Iconic Elon Eyebrows (Straight & Expressive, Right Brow Subtly Arched) -->
+          <path d="M 65 82.5 Q 74 79.5 84 82.5" stroke="#3d2b1f" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+          <path d="M 96 81.5 Q 106 77 115 80.5" stroke="#3d2b1f" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+
+          <!-- Deep-Set Narrow / Slightly Squinty Focused Hazel-Blue Elon Eyes -->
+          <path d="M 66 89 Q 75 84.5 84 89" stroke="#c38e6d" stroke-width="1.2" fill="none" opacity="0.65"/>
+          <path d="M 67 90.5 Q 75 87 83 90.5 Q 75 93.3 67 90.5 Z" fill="#ffffff"/>
+          <circle cx="75.5" cy="90.2" r="2.6" fill="#4b697d"/>
+          <circle cx="75.5" cy="90.2" r="1.3" fill="#0f172a"/>
+          <circle cx="76.4" cy="89.4" r="0.65" fill="#ffffff"/>
+          <path d="M 66.5 90 Q 75 86.2 83.5 90" stroke="#261912" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+          <path d="M 68 94.5 Q 75 96.4 82 94.2" stroke="#c08c6b" stroke-width="1.15" fill="none" opacity="0.62"/>
+
+          <path d="M 96 89 Q 105 84.5 114 89" stroke="#c38e6d" stroke-width="1.2" fill="none" opacity="0.65"/>
+          <path d="M 97 90.5 Q 105 87 113 90.5 Q 105 93.3 97 90.5 Z" fill="#ffffff"/>
+          <circle cx="104.5" cy="90.2" r="2.6" fill="#4b697d"/>
+          <circle cx="104.5" cy="90.2" r="1.3" fill="#0f172a"/>
+          <circle cx="105.4" cy="89.4" r="0.65" fill="#ffffff"/>
+          <path d="M 96.5 90 Q 105 86.2 113.5 90" stroke="#261912" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+          <path d="M 98 94.2 Q 105 96.4 112 94.5" stroke="#c08c6b" stroke-width="1.15" fill="none" opacity="0.62"/>
+
+          <!-- Classic Elon Broad Rounded Nose -->
+          <path d="M 88 89 L 86.5 101" stroke="#c79270" stroke-width="1.2" fill="none" opacity="0.65"/>
+          <path d="M 84 103.5 Q 90 107.5 96 103.5" stroke="#b57d5b" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+          <ellipse cx="86.5" cy="104" rx="1.6" ry="0.9" fill="#a8704e" opacity="0.65"/>
+          <ellipse cx="93.5" cy="104" rx="1.6" ry="0.9" fill="#a8704e" opacity="0.65"/>
+
+          <!-- Smiling Cheek Creases / Nasolabial Folds -->
+          <path d="M 79 104 Q 73 111 73 118" stroke="#c18b6a" stroke-width="1.15" fill="none" opacity="0.52" stroke-linecap="round"/>
+          <path d="M 101 104 Q 107 111 107 117" stroke="#c18b6a" stroke-width="1.15" fill="none" opacity="0.52" stroke-linecap="round"/>
+
+          <!-- Signature Elon Confident Lopsided Keynote Smirk (Tight-Lipped, Right Corner Cocked Up!) -->
+          <path d="M 77 116.5 Q 91 119.5 104 113.5" stroke="#7d4a3a" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+          <path d="M 82 119.5 Q 91 121.5 99 118.5" stroke="#c2856d" stroke-width="1.25" fill="none" stroke-linecap="round" opacity="0.72"/>
+          <path d="M 103 111.5 Q 106.5 113.5 104.5 116" stroke="#a66f50" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+
+          <!-- Light Chin Scruff & Chin Cleft -->
+          <path d="M 76 125 Q 90 134 104 125 Q 90 136 76 125 Z" fill="#5c4332" opacity="0.16"/>
+          <path d="M 86 127 Q 90 129.5 94 127" stroke="#b98260" stroke-width="1.3" fill="none" opacity="0.65" stroke-linecap="round"/>
         </svg>`,
     },
 

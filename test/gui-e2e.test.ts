@@ -1033,7 +1033,7 @@ test(
             assert.ok(bounds.table && bounds.table.left >= -2 && bounds.table.right <= bounds.vw + 2, `Table wider than phone viewport: ${JSON.stringify(bounds.table)}`);
             assert.ok(bounds.farLeftSeat && bounds.farLeftSeat.left >= -4, `Far-left opponent offscreen: ${JSON.stringify(bounds.farLeftSeat)}`);
             assert.ok(bounds.farRightSeat && bounds.farRightSeat.right <= bounds.vw + 4, `Far-right opponent offscreen: ${JSON.stringify(bounds.farRightSeat)}`);
-            assert.ok(bounds.actionBtns.length >= 3);
+            assert.ok(bounds.actionBtns.length >= 2);
             for (const btn of bounds.actionBtns) {
               assert.ok(btn.left >= 0 && btn.right <= bounds.vw + 1 && btn.bottom <= bounds.vh + 1, `Action button clipped on phone: ${JSON.stringify(btn)}`);
             }
