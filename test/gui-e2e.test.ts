@@ -1114,6 +1114,129 @@ test(
       });
 
       // ----------------------------------------------------------------------
+      // TEST 8b: Wall Sign & Ceiling Decor Clear Overhead Seat Labels/Bubbles on Short Landscape & Stay Visible on Desktop
+      // ----------------------------------------------------------------------
+      await t.test('wall sign hides cleanly on short landscape viewports (844x390, 932x430) with zero overhead overlap and stays visible above table on desktop (1280x800)', async () => {
+        for (const vp of [
+          { width: 844, height: 390 },
+          { width: 932, height: 430 },
+        ]) {
+          await withGamePage(
+            async ({ page }) => {
+              await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+              await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+              await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+              await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+              await page.locator('#btn-confirm-opponents').click();
+              await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+              await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+              await waitForPromptReady(page, 'Pre-flop');
+              await page.locator('#pots-window-close').click();
+
+              const check = await page.evaluate(() => {
+                type Box = { display: string; top: number; bottom: number; left: number; right: number; width: number; height: number };
+                const boxOf = (el: Element | null): Box | null => {
+                  if (!el) return null;
+                  const r = el.getBoundingClientRect();
+                  return {
+                    display: getComputedStyle(el).display,
+                    top: r.top,
+                    bottom: r.bottom,
+                    left: r.left,
+                    right: r.right,
+                    width: r.width,
+                    height: r.height,
+                  };
+                };
+                const overlaps = (a: Box | null, b: Box | null): boolean => {
+                  if (!a || !b) return false;
+                  if (a.display === 'none' || b.display === 'none') return false;
+                  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) return false;
+                  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+                };
+
+                const painting = boxOf(document.querySelector('.casino-painting'));
+                const chandelier = boxOf(document.querySelector('.chandelier'));
+                const sconces = Array.from(document.querySelectorAll('.sconce')).map((el) => boxOf(el));
+                const targets: Array<{ name: string; box: Box | null }> = [
+                  { name: 'dealer-nameplate', box: boxOf(document.querySelector('#dealer-container .character-nameplate')) },
+                  { name: 'dealer-speech-bubble', box: boxOf(document.getElementById('dealer-speech-bubble')) },
+                ];
+                for (const seat of Array.from(document.querySelectorAll('.character-container[data-opp-id]'))) {
+                  const id = seat.getAttribute('data-opp-id') || 'unknown';
+                  targets.push({ name: `${id}:overhead-stack`, box: boxOf(seat.querySelector('.seat-overhead-stack')) });
+                  targets.push({ name: `${id}:nameplate`, box: boxOf(seat.querySelector('.character-nameplate')) });
+                  targets.push({ name: `${id}:speech-bubble`, box: boxOf(seat.querySelector('.speech-bubble')) });
+                }
+
+                const zOf = (sel: string) => parseInt(getComputedStyle(document.querySelector(sel)!).zIndex || '0', 10);
+                return {
+                  paintingDisplay: painting?.display ?? 'missing',
+                  paintingOverlaps: targets.filter((t) => overlaps(painting, t.box)).map((t) => t.name),
+                  chandelierOverlaps: targets.filter((t) => overlaps(chandelier, t.box)).map((t) => t.name),
+                  sconceOverlaps: sconces.flatMap((sc, i) =>
+                    targets.filter((t) => overlaps(sc, t.box)).map((t) => `sconce-${i}:${t.name}`),
+                  ),
+                  activeBubbleCount: document.querySelectorAll('.speech-bubble.active').length,
+                  zPerspective: zOf('.pov-perspective-container'),
+                  zWall: zOf('.wall-bg'),
+                  zCeiling: zOf('.ceiling'),
+                };
+              });
+
+              assert.ok(check.activeBubbleCount >= 2, `Expected active speech bubbles on ${vp.width}x${vp.height}`);
+              assert.equal(check.paintingDisplay, 'none', `.casino-painting should be hidden on ${vp.width}x${vp.height}`);
+              assert.deepEqual(check.paintingOverlaps, [], `Wall sign overlaps overhead UI on ${vp.width}x${vp.height}`);
+              assert.deepEqual(check.chandelierOverlaps, [], `Chandelier overlaps overhead UI on ${vp.width}x${vp.height}`);
+              assert.deepEqual(check.sconceOverlaps, [], `Sconce overlaps overhead UI on ${vp.width}x${vp.height}`);
+              assert.ok(check.zPerspective > check.zWall && check.zPerspective > check.zCeiling);
+            },
+            { turnSpeed: 0.02, viewport: vp, engineOptions: { random: () => 0.5 } },
+          );
+        }
+
+        // Standard desktop (1280x800): .casino-painting remains visible above the table and dealer nameplate
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#pots-window-close').click();
+
+            const desktop = await page.evaluate(() => {
+              const paintingEl = document.querySelector('.casino-painting')!;
+              const painting = paintingEl.getBoundingClientRect();
+              const dealerPlate = document.querySelector('#dealer-container .character-nameplate')!.getBoundingClientRect();
+              const table = document.querySelector('.poker-table-surface')!.getBoundingClientRect();
+              return {
+                display: getComputedStyle(paintingEl).display,
+                width: painting.width,
+                height: painting.height,
+                top: painting.top,
+                bottom: painting.bottom,
+                dealerPlateTop: dealerPlate.top,
+                tableTop: table.top,
+              };
+            });
+
+            assert.notEqual(desktop.display, 'none', '.casino-painting must remain visible on 1280x800 desktop');
+            assert.ok(desktop.width > 100 && desktop.height > 20, `Expected visible wall sign box: ${JSON.stringify(desktop)}`);
+            assert.ok(
+              desktop.bottom <= desktop.dealerPlateTop + 1,
+              `Desktop wall sign overlaps dealer nameplate: ${JSON.stringify(desktop)}`,
+            );
+            assert.ok(desktop.bottom < desktop.tableTop, `Desktop wall sign should sit above table: ${JSON.stringify(desktop)}`);
+          },
+          { turnSpeed: 0.02, viewport: { width: 1280, height: 800 }, engineOptions: { random: () => 0.5 } },
+        );
+      });
+
+      // ----------------------------------------------------------------------
       // TEST 9: Multi-Tab Stale Prompt Rejection (409 Conflict + Auto-Refresh)
       // ----------------------------------------------------------------------
       await t.test('two open tabs reject stale betting submission with 409 and refresh without applying a second wager', async () => {
