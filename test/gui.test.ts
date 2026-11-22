@@ -219,6 +219,121 @@ test('PokerGameEngine rotates BTN/SB/BB/UTG/CO clockwise every new hand and acts
   }
 });
 
+test('PokerGameEngine preserves full $10 pre-flop bring-in when BB posts short all-in and awards odd split-pot chip clockwise after BTN', () => {
+  // 1. Short-stacked BB ($5 left at a $5/$10 table) while other seats have chips:
+  //    Hand 1 starts with initialOpponentChips=15 (Player=500, initialButtonSeatIndex=0 -> BTN=You, SB=reginald, BB=buck).
+  //    On Hand 1: You fold, UTG/CO/SB/BB play out. Even simpler: Seat 2 (buck) starts with $15, loses $10 on Hand 1 -> $5 left,
+  //    OR Seat 2 (elon) has $5 left on Hand 2 when elon is BB!
+  //    Cleanest deterministic setup: initialOpponentChips=5, initialPlayerChips=500, initialButtonSeatIndex=1
+  //    Wait: if ALL opponents start at $5, only 1 funded seat remains after blinds -> need 2+ funded seats!
+  //    So run 1 quick hand where Player (500) + Buck (500) stay deep while Seat 3 (elon) drops to $5:
+  //    Actually: start with initialOpponentChips=15, Player=500, initialButtonSeatIndex=1 (BTN=reg, SB=buck, BB=elon, UTG=tony, CO=You).
+  //    Hand 1 (smallBlind=5, bigBlind=10): Hand 1 SB (buck) posts $5, BB (elon) posts $10, You fold, buck wins -> elon has $5 left!
+  //    Hand 2 rotates BTN -> buck, SB -> elon ($5), BB -> tony ($5)? Wait: Hand 2 has initialButtonSeatIndex=0 on Hand 1:
+  //    Let's do it with exact deterministic deck: Hand 1 (initialButtonSeatIndex=0, initialOpponentChips=15, Player=500):
+  //      BTN=You(500), SB=reginald(15), BB=buck(15), UTG=elon(15), CO=tony(15).
+  //      UTG(elon) calls $10 (5 left), CO(tony) calls $10 (5 left), BTN(You) calls $10, SB(reg) calls $5 (5 left), BB(buck) checks (5 left).
+  //      Check down Flop/Turn/River -> Buck wins $50 pot (Buck=55, Reg/Elon/Tony=5 each, Player=490)!
+  //    Hand 2 rotates BTN -> reginald(5), SB -> buck(55), BB -> elon(5!!), UTG -> tony(5), CO -> You(490)!
+  //      Now BB (elon) posts $5 all-in, while SB (buck=50) and CO (You=490) are BOTH funded -> 2+ funded seats!
+  //      Nominal bring-in MUST remain $10: CO (You) MUST be offered Call $10 and Raise to $20 (NOT Call $5 / Raise to $15)!
+  let handIdx = 0;
+  const makeShortBbDeck = () => {
+    handIdx += 1;
+    if (handIdx === 1) {
+      const cards = [
+        new Card('♠', '3'), new Card('♥', '7'), // Player
+        new Card('♦', 'J'), new Card('♥', '8'), // Seat 1: Reginald
+        new Card('♠', 'A'), new Card('♥', 'A'), // Seat 2: Buck (wins Hand 1 -> $55!)
+        new Card('♦', '10'), new Card('♦', '3'), // Seat 3: Elon ($5 left -> short BB on Hand 2!)
+        new Card('♠', 'J'), new Card('♣', '5'), // Seat 4: Tony ($5 left)
+        new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+        new Card('♣', 'Q'),
+        new Card('♥', '4'),
+      ];
+      return { draw: () => cards.shift()! };
+    }
+    const cards = [
+      new Card('♠', 'K'), new Card('♥', 'K'), // Player
+      new Card('♦', 'J'), new Card('♥', '8'), // Seat 1
+      new Card('♠', 'Q'), new Card('♥', 'Q'), // Seat 2
+      new Card('♠', 'A'), new Card('♥', 'A'), // Seat 3: Elon (short BB $5 all-in)
+      new Card('♠', 'J'), new Card('♣', '5'), // Seat 4
+      new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+      new Card('♣', '3'),
+      new Card('♥', '4'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const shortBbEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 15,
+    initialButtonSeatIndex: 0,
+    random: () => 0.5, // always call/check
+    deckFactory: makeShortBbDeck,
+  });
+  shortBbEngine.act('select_opponents:reginald,buck,elon,tony');
+  shortBbEngine.act('easy'); // Hand 1: BTN=You
+  shortBbEngine.act('call'); // Pre-flop -> Flop
+  shortBbEngine.act('check'); // Flop -> Turn
+  shortBbEngine.act('check'); // Turn -> River
+  const h1 = shortBbEngine.act('check'); // River -> Showdown: Buck wins $50 (Buck=55, Elon=5)
+  assert.equal(h1.opponents.find((o) => o.id === 'buck')!.chips, 55);
+  assert.equal(h1.opponents.find((o) => o.id === 'elon')!.chips, 5);
+
+  const h2 = shortBbEngine.act('yes'); // Hand 2: BTN=reg, SB=buck(55), BB=elon(5 -> posts $5 all-in!), UTG=tony(5), CO=You(490)
+  assert.equal(h2.playerPosition, 'CO');
+  const elonH2 = h2.opponents.find((o) => o.id === 'elon')!;
+  assert.equal(elonH2.position, 'BB');
+  assert.equal(elonH2.handContribution, 5, 'Short-stacked BB keeps its actual $5 contribution');
+  assert.equal(h2.stage, 'player_response');
+  assert.equal(h2.prompt?.choices.find((c) => c.id === 'call')?.label, 'Call $10');
+  assert.equal(h2.prompt?.choices.find((c) => c.id === 'bet')?.label, 'Raise to $20');
+
+  // 2. Poker TDA Rule 21: Odd chip in a $25 two-way tie between BTN (Player, seat 0) and BB (Buck, seat 2)
+  //    after SB (Reginald, seat 1) folded MUST go to BB ($13), NOT BTN ($12)!
+  //    Using hard mode with random=() => 0.99:
+  //    - UTG/CO/SB hold weak offsuit 2-5 (strength 0.25 < 0.32) so they deterministically fold facing $10.
+  //    - BB holds 4♦ 8♠ (strength 0.50 < 0.58) so BB deterministically checks pre-flop/Flop/Turn/River.
+  //    - Board A♠ K♦ Q♣ J♥ 9♠ plays for both Player (4♥ 8♣) and BB (4♦ 8♠) -> exact $25 tie!
+  const makeBoardTieDeck = () => {
+    const cards = [
+      new Card('♥', '4'), new Card('♣', '8'), // Player (BTN)
+      new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> folds $5!)
+      new Card('♦', '4'), new Card('♠', '8'), // Seat 2: Buck (BB -> checks down & ties on board!)
+      new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (UTG -> folds)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (CO -> folds)
+      new Card('♠', 'A'), new Card('♦', 'K'), new Card('♣', 'Q'), // Flop
+      new Card('♥', 'J'), // Turn
+      new Card('♠', '9'), // River (A-K-Q-J-9 high-card board plays for both!)
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const oddChipEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeBoardTieDeck,
+  });
+  oddChipEngine.act('select_opponents:reginald,buck,elon,tony');
+  oddChipEngine.act('hard'); // UTG & CO fold -> prompts BTN (You)
+  oddChipEngine.act('call'); // BTN calls $10 -> SB folds ($5 dead) -> BB checks -> Flop (pot = $25)
+  oddChipEngine.act('check'); // Flop
+  oddChipEngine.act('check'); // Turn
+  const tieEnd = oddChipEngine.act('check'); // River -> Showdown tie ($25 pot)!
+  assert.equal(tieEnd.stage, 'hand_over');
+  assert.equal(tieEnd.pot, 25);
+  assert.equal(tieEnd.outcome?.result, 'tie');
+  const buckTie = tieEnd.opponents.find((o) => o.id === 'buck')!;
+  assert.equal(buckTie.totalPotWon, 13, 'BB (first clockwise after BTN) must receive the odd chip ($13)');
+  assert.equal(tieEnd.playerTotalPotWon, 12, 'BTN must receive $12 (not $13)');
+  assert.equal(buckTie.chips, 503);
+  assert.equal(tieEnd.playerChips, 502);
+});
+
 test('PokerGameEngine reveals folded opponents’ cards and reveals all players’ cards when player folds and hand ends', () => {
   const engine = new PokerGameEngine({ random: () => 0.5 });
   engine.act('select_opponents:reginald,buck,elon,tony');

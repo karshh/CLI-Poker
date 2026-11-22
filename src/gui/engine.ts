@@ -452,6 +452,7 @@ interface SeatLedgerEntry {
 
 interface PotSeat {
   id: string;
+  seatIndex: number;
   name: string;
   isPlayer: boolean;
   contribution: number;
@@ -1203,7 +1204,12 @@ export class PokerGameEngine {
     const utgSeat = (this.buttonSeatIndex + 3) % 5;
     const sbPosted = this.postBlind(sbSeat, this.smallBlind, 'SB');
     const bbPosted = this.postBlind(bbSeat, this.bigBlind, 'BB');
-    this.currentStreetHighBet = Math.max(sbPosted, bbPosted);
+    // Keep the nominal full big-blind bring-in for remaining funded seats even if the BB posted short all-in
+    // (the short BB keeps its actual contribution for side-pot eligibility).
+    const useFullBringIn = this.bigBlind > 0 && this.countFundedActiveSeats() >= 2;
+    this.currentStreetHighBet = useFullBringIn
+      ? Math.max(this.bigBlind, sbPosted, bbPosted)
+      : Math.max(sbPosted, bbPosted);
     if (bbPosted > 0) {
       this.currentBettorName = this.getSeatDisplayName(bbSeat);
     } else if (sbPosted > 0) {
@@ -1546,14 +1552,19 @@ export class PokerGameEngine {
         const sliceContenders = eligible.length > 0 ? eligible : activeSeats;
         const sliceWinners = compareBest(sliceContenders);
         if (sliceWinners.length > 0) {
-          const share = Math.floor(slicePot / sliceWinners.length);
-          let remainder = slicePot - share * sliceWinners.length;
-          for (const w of sliceWinners) {
+          // Poker TDA Rule 21: award odd chip(s) to the first eligible winner(s) clockwise after the Dealer Button
+          const sbSeat = (this.buttonSeatIndex + 1) % 5;
+          const orderedWinners = [...sliceWinners].sort(
+            (a, b) => ((a.seatIndex - sbSeat + 5) % 5) - ((b.seatIndex - sbSeat + 5) % 5),
+          );
+          const share = Math.floor(slicePot / orderedWinners.length);
+          let remainder = slicePot - share * orderedWinners.length;
+          for (const w of orderedWinners) {
             const award = share + (remainder > 0 ? 1 : 0);
             if (remainder > 0) remainder -= 1;
             payoutById.set(w.id, (payoutById.get(w.id) ?? 0) + award);
           }
-          slices.push({ slicePot, unmatched: false, winners: sliceWinners });
+          slices.push({ slicePot, unmatched: false, winners: orderedWinners });
         }
       }
 
@@ -1619,14 +1630,16 @@ export class PokerGameEngine {
     const seats: PotSeat[] = [
       {
         id: 'player',
+        seatIndex: 0,
         name: 'You',
         isPlayer: true,
         contribution: this.playerHandContribution,
         active: false,
         cards: null,
       },
-      ...this.opponents.map((opp) => ({
+      ...this.opponents.map((opp, idx) => ({
         id: opp.profile.id,
+        seatIndex: idx + 1,
         name: opp.profile.name,
         isPlayer: false,
         contribution: opp.handContribution,
@@ -1763,14 +1776,16 @@ export class PokerGameEngine {
     const seats: PotSeat[] = [
       {
         id: 'player',
+        seatIndex: 0,
         name: 'You',
         isPlayer: true,
         contribution: this.playerHandContribution,
         active: !this.playerFolded,
         cards: playerFull,
       },
-      ...this.opponents.map((opp) => ({
+      ...this.opponents.map((opp, idx) => ({
         id: opp.profile.id,
+        seatIndex: idx + 1,
         name: opp.profile.name,
         isPlayer: false,
         contribution: opp.handContribution,

@@ -1603,7 +1603,11 @@
 
     await delay(350);
 
-    let lastRenderedStreet = events[0] && events[0].streetName ? events[0].streetName : (currentState ? currentState.streetName : 'Pre-flop');
+    let lastRenderedStreet = isNewHandStart
+      ? 'Pre-flop'
+      : currentState && currentState.streetName
+        ? currentState.streetName
+        : 'Pre-flop';
 
     for (const event of events) {
       if (event.streetName && lastRenderedStreet && event.streetName !== lastRenderedStreet) {

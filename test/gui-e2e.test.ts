@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { startServer, type PokerServerInstance } from '../src/gui/server.js';
-import type { SerializedGameState } from '../src/gui/engine.js';
+import type { PokerGameEngineOptions, SerializedGameState } from '../src/gui/engine.js';
 
 const REQUIRE_PLAYWRIGHT = process.env['REQUIRE_PLAYWRIGHT'] === '1';
 
@@ -382,9 +382,13 @@ test(
 
     async function withGamePage(
       fn: (ctx: { page: Page; baseUrl: string; instance: PokerServerInstance; consoleErrors: string[]; pageErrors: string[] }) => Promise<void>,
-      options: { turnSpeed?: number; viewport?: { width: number; height: number } } = {},
+      options: {
+        turnSpeed?: number;
+        viewport?: { width: number; height: number };
+        engineOptions?: PokerGameEngineOptions;
+      } = {},
     ): Promise<void> {
-      const instance = await startServer(0);
+      const instance = await startServer(0, undefined, options.engineOptions);
       const baseUrl = `http://127.0.0.1:${instance.port}`;
       const context = await browser.newContext({
         viewport: options.viewport ?? { width: 1366, height: 860 },
@@ -763,10 +767,10 @@ test(
                 thinkingOrder.push(id);
               }
             }
-            // First two thinkers on Pre-flop must be UTG (elon) then CO (tony), followed by SB (reginald)
-            assert.deepEqual(thinkingOrder.slice(0, 3), ['elon', 'tony', 'reginald']);
+            // First four thinkers across Pre-flop must be UTG (elon) -> CO (tony) -> SB (reginald) -> BB (buck)
+            assert.deepEqual(thinkingOrder.slice(0, 4), ['elon', 'tony', 'reginald', 'buck']);
 
-            for (const id of ['elon', 'tony', 'reginald']) {
+            for (const id of ['elon', 'tony', 'reginald', 'buck']) {
               const seenTexts = new Set<string>();
               for (const entry of turnLog) {
                 if (entry.bubbleTexts[id]) seenTexts.add(entry.bubbleTexts[id]!);
@@ -774,7 +778,7 @@ test(
               assert.ok(seenTexts.size >= 2, `Expected ${id} bubble to update from thinking -> decision`);
             }
           },
-          { turnSpeed: 1 }, // REAL 1-2 second timing!
+          { turnSpeed: 1, engineOptions: { random: () => 0.5 } }, // REAL 1-2s timing, deterministic call/check branch!
         );
       });
 
@@ -1348,6 +1352,61 @@ test(
             }
           },
           { turnSpeed: 0.02 },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 13: Checking as BB Renders Flop Banner & Community Cards BEFORE First Flop Opponent Thinks
+      // ----------------------------------------------------------------------
+      await t.test('checking as Big Blind paints FLOP banner and 3 community cards before the first Flop opponent starts thinking', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            // With initialButtonSeatIndex: 3, You are BB! Wait for Check option on Pre-flop.
+            await waitForPromptReady(page, 'Pre-flop • BB');
+
+            // Observe DOM the instant the first Flop opponent enters .is-thinking
+            await page.evaluate(() => {
+              const snapshots: Array<{ banner: string; boardCardCount: number; thinkingId: string }> = [];
+              (window as unknown as { __FLOP_SNAPS__: typeof snapshots }).__FLOP_SNAPS__ = snapshots;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  const banner = document.getElementById('street-banner')?.textContent?.trim() || '';
+                  const boardCardCount = document.querySelectorAll('#community-cards-container .card').length;
+                  const thinkingId = thinking.getAttribute('data-opp-id') || '';
+                  snapshots.push({ banner, boardCardCount, thinkingId });
+                }
+              }, 30);
+              (window as unknown as { __FLOP_TIMER__: ReturnType<typeof setInterval> }).__FLOP_TIMER__ = timer;
+            });
+
+            // Click Check as BB to close Pre-flop -> triggers Flop deal + SB (tony) thinking first!
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await page.waitForSelector('.character-container.is-thinking', { timeout: 5000 });
+            await waitForPromptReady(page, 'Flop • BB');
+
+            const snaps = await page.evaluate(() => {
+              clearInterval((window as unknown as { __FLOP_TIMER__: ReturnType<typeof setInterval> }).__FLOP_TIMER__);
+              return (
+                window as unknown as {
+                  __FLOP_SNAPS__: Array<{ banner: string; boardCardCount: number; thinkingId: string }>;
+                }
+              ).__FLOP_SNAPS__;
+            });
+
+            assert.ok(snaps.length > 0, 'Expected to observe at least one Flop opponent thinking snapshot');
+            const firstSnap = snaps[0]!;
+            assert.equal(firstSnap.banner, 'FLOP', `Banner must already say FLOP when first Flop opponent thinks, saw: ${firstSnap.banner}`);
+            assert.equal(firstSnap.boardCardCount, 3, `All 3 Flop community cards must be painted before first Flop opponent thinks, saw: ${firstSnap.boardCardCount}`);
+            assert.equal(firstSnap.thinkingId, 'tony', 'SB (tony) must act first on Flop when BTN is seat 3');
+          },
+          { turnSpeed: 0.25, engineOptions: { initialButtonSeatIndex: 3, random: () => 0.5 } },
         );
       });
     } finally {

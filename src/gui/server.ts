@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PokerGameEngine, StaleStateError } from './engine.js';
+import { PokerGameEngine, StaleStateError, type PokerGameEngineOptions } from './engine.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const MAX_ACTION_BODY_BYTES = 1024;
@@ -355,8 +355,9 @@ export function createPokerServer(
 export async function startServer(
   preferredPort = 3000,
   publicDir: string = findPublicDir(),
+  engineOptions?: PokerGameEngineOptions,
 ): Promise<PokerServerInstance> {
-  const engine = new PokerGameEngine();
+  const engine = new PokerGameEngine(engineOptions);
   let boundPort: number | null = null;
   const server = createPokerServer(engine, publicDir, {
     getBoundPort: () => boundPort,
