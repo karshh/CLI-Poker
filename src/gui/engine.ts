@@ -167,6 +167,12 @@ export interface TurnStartSeatSnapshot {
   folded: boolean;
 }
 
+export interface PotAwardBreakdown {
+  label: string;
+  amount: number;
+  winners: { id: string; name: string; amount: number }[];
+}
+
 export interface SerializedGameState {
   tableInstanceId: string;
   stateRevision: number;
@@ -206,8 +212,10 @@ export interface SerializedGameState {
   prompt: PromptInfo | null;
   playerCurrentRank: string | null;
   outcome: {
-    result: 'win' | 'tie' | 'loss' | 'fold';
+    result: 'win' | 'tie' | 'mixed' | 'loss' | 'fold';
     pot: number;
+    playerPayout?: number;
+    pots?: PotAwardBreakdown[];
     playerRank: HandRank | null;
     opponentRank: HandRank | null;
     winnerNames: string[];
@@ -465,6 +473,7 @@ interface PotSliceAward {
   slicePot: number;
   unmatched: boolean;
   winners: PotSeat[];
+  awards: { seat: PotSeat; amount: number }[];
 }
 
 interface PotSettlementSummary {
@@ -1582,7 +1591,7 @@ export class PokerGameEngine {
         // Sole unmatched top wager: return directly to that seat's stack
         const sole = contributors[0]!;
         unmatchedById.set(sole.id, (unmatchedById.get(sole.id) ?? 0) + slicePot);
-        slices.push({ slicePot, unmatched: true, winners: [sole] });
+        slices.push({ slicePot, unmatched: true, winners: [sole], awards: [{ seat: sole, amount: slicePot }] });
       } else {
         const sliceContenders = eligible.length > 0 ? eligible : activeSeats;
         const contenderKey = sliceContenders
@@ -1612,12 +1621,14 @@ export class PokerGameEngine {
         );
         const share = Math.floor(potEntry.pot / orderedWinners.length);
         let remainder = potEntry.pot - share * orderedWinners.length;
+        const sliceAwards: { seat: PotSeat; amount: number }[] = [];
         for (const w of orderedWinners) {
           const award = share + (remainder > 0 ? 1 : 0);
           if (remainder > 0) remainder -= 1;
           payoutById.set(w.id, (payoutById.get(w.id) ?? 0) + award);
+          sliceAwards.push({ seat: w, amount: award });
         }
-        slices.push({ slicePot: potEntry.pot, unmatched: false, winners: orderedWinners });
+        slices.push({ slicePot: potEntry.pot, unmatched: false, winners: orderedWinners, awards: sliceAwards });
       }
     }
 
@@ -1718,6 +1729,10 @@ export class PokerGameEngine {
             : 'Wins Pot';
     }
 
+    const contestedSlices = settlement.slices.filter((s) => !s.unmatched);
+    const hasSidePots = contestedSlices.length > 1;
+    const { pots: potBreakdown, summary: potRecap } = this.buildPotBreakdown(contestedSlices);
+
     const winnerNames = potWinners.map((w) => w.profile.name);
     const winnerLabel = this.formatNameList(winnerNames);
     const winningRank = !isUncontested && potWinners[0]?.rank ? potWinners[0].rank : null;
@@ -1727,7 +1742,9 @@ export class PokerGameEngine {
       : winningRank
         ? `with ${winningRank.name}`
         : 'after the remaining seats played out the hand';
-    const explanation = `You folded! ${winnerLabel} ${potWinners.length > 1 ? 'collected' : 'won'} the $${this.pot} pot ${resolutionDetail}.`;
+    const explanation = hasSidePots
+      ? `You folded! ${potRecap}.`
+      : `You folded! ${winnerLabel} ${potWinners.length > 1 ? 'collected' : 'won'} the $${this.pot} pot ${resolutionDetail}.`;
 
     this.dealerSpeech = explanation;
     this.narrative.push({ speaker: 'Dealer', text: explanation });
@@ -1735,12 +1752,16 @@ export class PokerGameEngine {
     this.outcome = {
       result: 'fold',
       pot: this.pot,
+      playerPayout: 0,
+      ...(potBreakdown.length > 0 ? { pots: potBreakdown } : {}),
       playerRank,
       opponentRank: winningRank,
       winnerNames,
-      message: winningRank
-        ? `You folded. ${winnerLabel} won the $${this.pot} pot with ${winningRank.name}.`
-        : `You folded. ${winnerLabel} won the $${this.pot} pot.`,
+      message: hasSidePots
+        ? `You folded. ${potRecap}.`
+        : winningRank
+          ? `You folded. ${winnerLabel} won the $${this.pot} pot with ${winningRank.name}.`
+          : `You folded. ${winnerLabel} won the $${this.pot} pot.`,
     };
 
     this.stage = 'hand_over';
@@ -1787,6 +1808,42 @@ export class PokerGameEngine {
     };
 
     this.stage = 'hand_over';
+  }
+
+  private buildPotBreakdown(contestedSlices: readonly PotSliceAward[]): {
+    pots: PotAwardBreakdown[];
+    summary: string;
+  } {
+    const total = contestedSlices.length;
+    const pots: PotAwardBreakdown[] = contestedSlices.map((slice, idx) => {
+      const label = idx === 0 ? 'Main pot' : total === 2 ? 'Side pot' : `Side pot ${idx}`;
+      return {
+        label,
+        amount: slice.slicePot,
+        winners: slice.awards.map((a) => ({
+          id: a.seat.id,
+          name: a.seat.name,
+          amount: a.amount,
+        })),
+      };
+    });
+
+    const summary = pots
+      .map((p) => {
+        if (p.winners.length === 1) {
+          return `${p.label} ($${p.amount}): ${p.winners[0]!.name}`;
+        }
+        const allEqual = p.winners.every((w) => w.amount === p.winners[0]!.amount);
+        if (allEqual) {
+          const names = this.formatNameList(p.winners.map((w) => w.name));
+          return `${p.label} ($${p.amount}): ${names} split ($${p.winners[0]!.amount} each)`;
+        }
+        const parts = p.winners.map((w) => `${w.name} $${w.amount}`).join(', ');
+        return `${p.label} ($${p.amount}): ${parts}`;
+      })
+      .join('; ');
+
+    return { pots, summary };
   }
 
   private finishShowdown(): void {
@@ -1859,8 +1916,21 @@ export class PokerGameEngine {
     const oppBreakdown = oppContenders.map((c) => `${c.name}: ${c.rank.name}`).join(', ');
     const contestedSlices = settlement.slices.filter((s) => !s.unmatched);
     const hasSidePots = contestedSlices.length > 1;
+    const { pots: potBreakdown, summary: potRecap } = this.buildPotBreakdown(contestedSlices);
     const playerOverallBest = settlement.bestOverallWinners.some((w) => w.isPlayer);
     const tiedOpponentsOverall = settlement.bestOverallWinners.filter((w) => !w.isPlayer);
+    const mainSlice = contestedSlices[0];
+    const playerWonMain = Boolean(mainSlice && mainSlice.winners.some((w) => w.isPlayer));
+    const playerWonAny = playerPayout > 0 || (this.pot === 0 && playerOverallBest);
+    const otherWonAny = contestedSlices.some((s) => s.winners.some((w) => !w.isPlayer));
+    const playerWonAllPotsSole =
+      contestedSlices.length > 0
+        ? contestedSlices.every((s) => s.winners.length === 1 && s.winners[0]?.isPlayer)
+        : playerOverallBest && tiedOpponentsOverall.length === 0;
+    const pureTieAllPots =
+      contestedSlices.length > 0
+        ? contestedSlices.every((s) => s.winners.length > 1 && s.winners.some((w) => w.isPlayer))
+        : playerOverallBest && tiedOpponentsOverall.length > 0;
 
     for (const opp of activeOpponents) {
       const oppPayout = settlement.payoutById.get(opp.profile.id) ?? 0;
@@ -1885,54 +1955,70 @@ export class PokerGameEngine {
     }
 
     const allPaidWinners = seats.filter((s) => (settlement.payoutById.get(s.id) ?? 0) > 0);
-    const sidePotSummary = hasSidePots
-      ? allPaidWinners
-          .map((s) => `${s.name} won $${settlement.payoutById.get(s.id) ?? 0}`)
-          .join('; ')
-      : '';
 
-    if (playerOverallBest && tiedOpponentsOverall.length === 0) {
+    if (playerWonAllPotsSole) {
       const wonAmt = this.pot > 0 ? playerPayout : 0;
       const explanation = hasSidePots
-        ? `Showdown! You won $${wonAmt} (main pot) with ${playerRank.name}! Side pots: ${sidePotSummary}. (${oppBreakdown}).`
+        ? `Showdown! You won $${wonAmt} total with ${playerRank.name} — ${potRecap}. (${oppBreakdown}).`
         : `Showdown! You won the $${wonAmt} pot with ${playerRank.name}! (${oppBreakdown}).`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
         result: 'win',
         pot: this.pot,
+        playerPayout: wonAmt,
+        ...(potBreakdown.length > 0 ? { pots: potBreakdown } : {}),
         playerRank,
         opponentRank: bestOpp.rank,
         winnerNames: hasSidePots ? allPaidWinners.map((w) => w.name) : ['You'],
         message: hasSidePots
-          ? `You won $${wonAmt} (main pot) with ${playerRank.name}! (${sidePotSummary}).`
+          ? `You won $${wonAmt} total with ${playerRank.name} (${potRecap}).`
           : `You won $${wonAmt}! Your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name}${oppContenders.length > 1 ? ` (${oppBreakdown})` : ''}.`,
       };
-    } else if (playerOverallBest && tiedOpponentsOverall.length > 0) {
+    } else if (pureTieAllPots) {
       const tiedOppNames = this.formatNameList(tiedOpponentsOverall.map((w) => w.name));
       const explanation = hasSidePots
-        ? `Showdown! Tie with ${tiedOppNames} (${playerRank.name}). Payouts: ${sidePotSummary}.`
+        ? `Showdown! Tie with ${tiedOppNames} (${playerRank.name}) — ${potRecap}.`
         : `Showdown! Tie with ${tiedOppNames} — both held ${playerRank.name}. Pot of $${this.pot} is split!`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
         result: 'tie',
         pot: this.pot,
+        playerPayout,
+        ...(potBreakdown.length > 0 ? { pots: potBreakdown } : {}),
         playerRank,
         opponentRank: bestOpp.rank,
         winnerNames: hasSidePots
           ? allPaidWinners.map((w) => w.name)
           : settlement.bestOverallWinners.map((w) => w.name),
         message: hasSidePots
-          ? `Tie with ${tiedOppNames} (${playerRank.name}). ${sidePotSummary}.`
+          ? `Tie with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
           : `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
+      };
+    } else if (playerWonAny && otherWonAny) {
+      const mainWinnerNames = this.formatNameList((mainSlice?.winners ?? []).map((w) => w.name));
+      const explanation = !playerWonMain
+        ? `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} in side pot(s) with ${playerRank.name}; ${mainWinnerNames} took the main pot (${bestOpp.rank.name}).`
+        : `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} total with ${playerRank.name}. (${oppBreakdown}).`;
+      this.dealerSpeech = explanation;
+      this.narrative.push({ speaker: 'Dealer', text: `${explanation} (${oppBreakdown}).` });
+      this.outcome = {
+        result: 'mixed',
+        pot: this.pot,
+        playerPayout,
+        ...(potBreakdown.length > 0 ? { pots: potBreakdown } : {}),
+        playerRank,
+        opponentRank: bestOpp.rank,
+        winnerNames: allPaidWinners.map((w) => w.name),
+        message: `Mixed result (you won $${playerPayout}): ${potRecap}.`,
       };
     } else {
       const winnerSeats = allPaidWinners.length > 0 ? allPaidWinners : settlement.bestOverallWinners;
       const winnerLabel = this.formatNameList(winnerSeats.map((w) => w.name));
       const winningRankName = bestOpp.rank.name;
       const explanation = hasSidePots
-        ? `Showdown! ${sidePotSummary}. Your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`
+        ? `Showdown! ${potRecap}. Your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`
         : `Showdown! ${winnerLabel} won the $${this.pot} pot with ${winningRankName}, beating your ${playerRank.name}.`;
       const lesson = `Lesson: your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`;
       this.dealerSpeech = explanation;
@@ -1940,11 +2026,13 @@ export class PokerGameEngine {
       this.outcome = {
         result: 'loss',
         pot: this.pot,
+        playerPayout: 0,
+        ...(potBreakdown.length > 0 ? { pots: potBreakdown } : {}),
         playerRank,
         opponentRank: bestOpp.rank,
         winnerNames: winnerSeats.map((w) => w.name),
         message: hasSidePots
-          ? `${sidePotSummary}. (${winningRankName} over your ${playerRank.name}).`
+          ? `${potRecap}. (${winningRankName} over your ${playerRank.name}).`
           : `${winnerLabel} won $${this.pot} with ${winningRankName} over your ${playerRank.name}.`,
         lesson,
       };

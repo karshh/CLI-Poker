@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
+import { Card } from '../src/card.js';
 import { startServer, type PokerServerInstance } from '../src/gui/server.js';
 import type { PokerGameEngineOptions, SerializedGameState } from '../src/gui/engine.js';
 
@@ -1407,6 +1408,96 @@ test(
             assert.equal(firstSnap.thinkingId, 'tony', 'SB (tony) must act first on Flop when BTN is seat 3');
           },
           { turnSpeed: 0.25, engineOptions: { initialButtonSeatIndex: 3, random: () => 0.5 } },
+        );
+      });
+
+      await t.test('mixed side-pot win renders gold mixed HUD status and separate main/side pot awards', async () => {
+        let handIdx = 0;
+        const deckFactory = () => {
+          handIdx += 1;
+          if (handIdx === 1) {
+            const cards = [
+              new Card('♠', '3'), new Card('♥', '7'),
+              new Card('♦', 'J'), new Card('♥', '8'),
+              new Card('♣', '10'), new Card('♦', '4'),
+              new Card('♥', '10'), new Card('♣', '5'),
+              new Card('♠', 'A'), new Card('♥', 'A'),
+              new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+              new Card('♣', 'Q'),
+              new Card('♥', '4'),
+            ];
+            return { draw: () => cards.shift()! };
+          }
+          const cards = [
+            new Card('♠', 'K'), new Card('♥', 'K'), // Player wins $30 side pot
+            new Card('♠', 'A'), new Card('♥', 'A'), // Reginald wins $75 main pot
+            new Card('♣', '7'), new Card('♦', '8'),
+            new Card('♥', '7'), new Card('♠', '8'),
+            new Card('♠', 'Q'), new Card('♥', 'Q'), // Tony loses side pot
+            new Card('♣', '2'), new Card('♦', '4'), new Card('♠', '6'),
+            new Card('♣', '9'),
+            new Card('♥', 'J'),
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page, baseUrl }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // Hand 1 -> Tony reaches $65, Reg/Buck/Elon drop to $15
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            // Hand 2 -> Flop bet $20 creates $75 main pot (Reginald) + $30 side pot (You)
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Mixed result');
+
+            const hud = await page.evaluate(() => {
+              const statusEl = document.getElementById('hud-street-status')!;
+              return {
+                statusText: statusEl.textContent?.trim() || '',
+                statusColor: getComputedStyle(statusEl).color,
+                promptTitle: document.getElementById('action-prompt-title')?.textContent?.trim() || '',
+              };
+            });
+
+            const state = await apiGetState(baseUrl);
+            assert.equal(state.outcome?.result, 'mixed');
+            assert.equal(hud.statusText, 'Result: Mixed Pot Split (You Won $30)');
+            assert.equal(hud.statusColor, 'rgb(251, 191, 36)', 'Mixed side-pot win must render in gold/amber, not red');
+            assert.match(hud.promptTitle, /Main pot \(\$75\): Lord Reginald; Side pot \(\$30\): You/);
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialPlayerChips: 500,
+              initialOpponentChips: 25,
+              initialButtonSeatIndex: 0,
+              random: () => 0.5,
+              deckFactory,
+            },
+          },
         );
       });
     } finally {

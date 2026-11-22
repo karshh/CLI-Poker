@@ -1712,6 +1712,13 @@
       if (state.outcome.result === 'win') {
         elHudStreetStatus.textContent = 'Result: You Won the Hand!';
         elHudStreetStatus.style.color = '#34d399';
+      } else if (state.outcome.result === 'mixed') {
+        const payoutText =
+          typeof state.outcome.playerPayout === 'number' && state.outcome.playerPayout > 0
+            ? ` (You Won $${state.outcome.playerPayout})`
+            : '';
+        elHudStreetStatus.textContent = `Result: Mixed Pot Split${payoutText}`;
+        elHudStreetStatus.style.color = '#fbbf24';
       } else if (state.outcome.result === 'loss' || state.outcome.result === 'fold') {
         const winners = state.outcome.winnerNames && state.outcome.winnerNames.length
           ? state.outcome.winnerNames.join(' & ')
@@ -1798,6 +1805,8 @@
     if (state.outcome && (!prevState || !prevState.outcome)) {
       if (state.outcome.result === 'win') {
         sfx.playWin();
+      } else if (state.outcome.result === 'mixed') {
+        sfx.playChipSound();
       } else if (state.outcome.result === 'loss' || state.outcome.result === 'fold') {
         sfx.playDefeat();
       }

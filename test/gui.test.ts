@@ -486,6 +486,92 @@ test('PokerGameEngine combines folded layers before splitting a tied $60 pot and
   );
 });
 
+test('PokerGameEngine reports main- and side-pot awards separately and emits mixed result when player wins side pot only', () => {
+  const runTwoPotFixture = (playerWinsMain: boolean) => {
+    let handIdx = 0;
+    const deckFactory = () => {
+      handIdx += 1;
+      if (handIdx === 1) {
+        // Hand 1 (initialButtonSeatIndex=0, oppChips=25): everyone calls $10 and checks down -> Tony wins $50 -> Tony=$65, Reg/Buck/Elon=$15, You=$490.
+        const cards = [
+          new Card('♠', '3'), new Card('♥', '7'), // Player
+          new Card('♦', 'J'), new Card('♥', '8'), // Seat 1: Reginald ($15)
+          new Card('♣', '10'), new Card('♦', '4'), // Seat 2: Buck ($15)
+          new Card('♥', '10'), new Card('♣', '5'), // Seat 3: Elon ($15)
+          new Card('♠', 'A'), new Card('♥', 'A'), // Seat 4: Tony ($65)
+          new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+          new Card('♣', 'Q'),
+          new Card('♥', '4'),
+        ];
+        return { draw: () => cards.shift()! };
+      }
+      // Hand 2 (BTN=Reginald($15), SB=Buck($15), BB=Elon($15), UTG=Tony($65), CO=You($490)):
+      //   Pre-flop: all 5 put in $10. Flop: You bet $20 -> Reg/Buck/Elon call $5 all-in ($15 each), Tony calls $20 ($30).
+      //   Main pot = $75 (all 5 eligible); Side pot = $30 (You & Tony eligible). Total pot = $105.
+      const cards = [
+        ...(playerWinsMain
+          ? [new Card('♠', 'A'), new Card('♥', 'A')] // Player wins BOTH main ($75) & side ($30)
+          : [new Card('♠', 'K'), new Card('♥', 'K')]), // Player wins SIDE pot ($30) only
+        ...(playerWinsMain
+          ? [new Card('♠', 'K'), new Card('♥', 'K')] // Seat 1: Reginald (short $15)
+          : [new Card('♠', 'A'), new Card('♥', 'A')]), // Seat 1: Reginald wins MAIN pot ($75)!
+        new Card('♣', '7'), new Card('♦', '8'), // Seat 2: Buck ($15)
+        new Card('♥', '7'), new Card('♠', '8'), // Seat 3: Elon ($15)
+        new Card('♠', 'Q'), new Card('♥', 'Q'), // Seat 4: Tony ($65 -> loses side pot to Player!)
+        new Card('♣', '2'), new Card('♦', '4'), new Card('♠', '6'),
+        new Card('♣', '9'),
+        new Card('♥', 'J'),
+      ];
+      return { draw: () => cards.shift()! };
+    };
+
+    const engine = new PokerGameEngine({
+      initialPlayerChips: 500,
+      initialOpponentChips: 25,
+      initialButtonSeatIndex: 0,
+      random: () => 0.5, // easy mode: always call/check
+      deckFactory,
+    });
+    engine.act('select_opponents:reginald,buck,elon,tony');
+    engine.act('easy');
+    engine.act('call');
+    engine.act('check');
+    engine.act('check');
+    engine.act('check'); // End Hand 1
+
+    engine.act('yes'); // Start Hand 2
+    engine.act('call'); // Pre-flop $10 -> Flop
+    engine.act('bet'); // Flop $20 -> creates $75 main pot + $30 side pot -> Turn
+    engine.act('check'); // Turn -> River
+    return engine.act('check'); // River -> Showdown
+  };
+
+  // A. Player wins BOTH $75 main pot and $30 side pot ($105 total):
+  const sweep = runTwoPotFixture(true);
+  assert.equal(sweep.outcome?.result, 'win');
+  assert.equal(sweep.outcome?.pot, 105);
+  assert.equal(sweep.outcome?.playerPayout, 105);
+  assert.deepEqual(sweep.outcome?.pots, [
+    { label: 'Main pot', amount: 75, winners: [{ id: 'player', name: 'You', amount: 75 }] },
+    { label: 'Side pot', amount: 30, winners: [{ id: 'player', name: 'You', amount: 30 }] },
+  ]);
+  assert.match(sweep.outcome?.message ?? '', /Main pot \(\$75\): You; Side pot \(\$30\): You/);
+  assert.doesNotMatch(sweep.outcome?.message ?? '', /\$105 \(main pot\)/);
+  assert.doesNotMatch(sweep.dealerSpeech, /Side pots: You won \$105/);
+
+  // B. Short-stack Reginald wins $75 main pot while Player wins $30 side pot:
+  const mixed = runTwoPotFixture(false);
+  assert.equal(mixed.outcome?.result, 'mixed', 'Winning a side pot while another seat wins main pot must report mixed, not loss');
+  assert.equal(mixed.outcome?.pot, 105);
+  assert.equal(mixed.outcome?.playerPayout, 30);
+  assert.deepEqual(mixed.outcome?.pots, [
+    { label: 'Main pot', amount: 75, winners: [{ id: 'reginald', name: 'Lord Reginald', amount: 75 }] },
+    { label: 'Side pot', amount: 30, winners: [{ id: 'player', name: 'You', amount: 30 }] },
+  ]);
+  assert.match(mixed.outcome?.message ?? '', /Mixed result \(you won \$30\): Main pot \(\$75\): Lord Reginald; Side pot \(\$30\): You/);
+  assert.match(mixed.dealerSpeech, /Main pot \(\$75\): Lord Reginald; Side pot \(\$30\): You/);
+});
+
 test('PokerGameEngine reveals folded opponents’ cards and reveals all players’ cards when player folds and hand ends', () => {
   const engine = new PokerGameEngine({ random: () => 0.5 });
   engine.act('select_opponents:reginald,buck,elon,tony');
