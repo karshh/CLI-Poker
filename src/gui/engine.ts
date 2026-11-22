@@ -1210,7 +1210,7 @@ export class PokerGameEngine {
     this.currentStreetHighBet = useFullBringIn
       ? Math.max(this.bigBlind, sbPosted, bbPosted)
       : Math.max(sbPosted, bbPosted);
-    if (bbPosted > 0) {
+    if (bbPosted >= sbPosted && bbPosted > 0) {
       this.currentBettorName = this.getSeatDisplayName(bbSeat);
     } else if (sbPosted > 0) {
       this.currentBettorName = this.getSeatDisplayName(sbSeat);
@@ -1368,6 +1368,30 @@ export class PokerGameEngine {
     }
   }
 
+  private getMaxActiveStreetContribution(): number {
+    let maxContrib = this.playerFolded ? 0 : this.playerStreetContribution;
+    for (const opp of this.opponents) {
+      if (!opp.folded && opp.streetContribution > maxContrib) {
+        maxContrib = opp.streetContribution;
+      }
+    }
+    return maxContrib;
+  }
+
+  /**
+   * Recomputes the effective street wager whenever <= 1 funded active seat remains
+   * (for example, if a nominal $10 big-blind bring-in was preserved after short-stacked
+   * blinds posted all-in, and all other funded seats subsequently folded).
+   */
+  private syncEffectiveStreetHighBet(): void {
+    if (this.countFundedActiveSeats() <= 1) {
+      const maxLiveStreetBet = this.getMaxActiveStreetContribution();
+      if (this.currentStreetHighBet > maxLiveStreetBet) {
+        this.currentStreetHighBet = maxLiveStreetBet;
+      }
+    }
+  }
+
   /**
    * Unified clockwise action-queue processor for every street.
    * Pauses whenever it reaches Seat 0 (Player) with a legal decision; otherwise runs
@@ -1379,6 +1403,8 @@ export class PokerGameEngine {
         this.finishUncontestedHand();
         return;
       }
+
+      this.syncEffectiveStreetHighBet();
 
       const seatIdx = this.streetActionQueue.shift()!;
       if (!this.isSeatActive(seatIdx)) continue;
@@ -1536,6 +1562,15 @@ export class PokerGameEngine {
     const bestOverallWinners = compareBest(activeSeats);
     const levels = [...new Set(seats.map((s) => s.contribution).filter((c) => c > 0))].sort((a, b) => a - b);
 
+    // Combine contribution layers that share the exact same eligible active contenders
+    // so folded dead-money levels never create artificial split boundaries that award extra odd chips.
+    type ContestedPot = {
+      pot: number;
+      contenders: PotSeat[];
+    };
+    const contestedPotsByKey = new Map<string, ContestedPot>();
+    const contestedPots: ContestedPot[] = [];
+
     let prevLevel = 0;
     for (const level of levels) {
       const width = level - prevLevel;
@@ -1550,25 +1585,40 @@ export class PokerGameEngine {
         slices.push({ slicePot, unmatched: true, winners: [sole] });
       } else {
         const sliceContenders = eligible.length > 0 ? eligible : activeSeats;
-        const sliceWinners = compareBest(sliceContenders);
-        if (sliceWinners.length > 0) {
-          // Poker TDA Rule 21: award odd chip(s) to the first eligible winner(s) clockwise after the Dealer Button
-          const sbSeat = (this.buttonSeatIndex + 1) % 5;
-          const orderedWinners = [...sliceWinners].sort(
-            (a, b) => ((a.seatIndex - sbSeat + 5) % 5) - ((b.seatIndex - sbSeat + 5) % 5),
-          );
-          const share = Math.floor(slicePot / orderedWinners.length);
-          let remainder = slicePot - share * orderedWinners.length;
-          for (const w of orderedWinners) {
-            const award = share + (remainder > 0 ? 1 : 0);
-            if (remainder > 0) remainder -= 1;
-            payoutById.set(w.id, (payoutById.get(w.id) ?? 0) + award);
-          }
-          slices.push({ slicePot, unmatched: false, winners: orderedWinners });
+        const contenderKey = sliceContenders
+          .map((s) => s.id)
+          .sort()
+          .join('|');
+        const existing = contestedPotsByKey.get(contenderKey);
+        if (existing) {
+          existing.pot += slicePot;
+        } else {
+          const potEntry: ContestedPot = { pot: slicePot, contenders: sliceContenders };
+          contestedPotsByKey.set(contenderKey, potEntry);
+          contestedPots.push(potEntry);
         }
       }
 
       prevLevel = level;
+    }
+
+    const sbSeat = (this.buttonSeatIndex + 1) % 5;
+    for (const potEntry of contestedPots) {
+      const sliceWinners = compareBest(potEntry.contenders);
+      if (sliceWinners.length > 0) {
+        // Poker TDA Rule 21: award odd chip(s) once per logical pot clockwise after the Dealer Button
+        const orderedWinners = [...sliceWinners].sort(
+          (a, b) => ((a.seatIndex - sbSeat + 5) % 5) - ((b.seatIndex - sbSeat + 5) % 5),
+        );
+        const share = Math.floor(potEntry.pot / orderedWinners.length);
+        let remainder = potEntry.pot - share * orderedWinners.length;
+        for (const w of orderedWinners) {
+          const award = share + (remainder > 0 ? 1 : 0);
+          if (remainder > 0) remainder -= 1;
+          payoutById.set(w.id, (payoutById.get(w.id) ?? 0) + award);
+        }
+        slices.push({ slicePot: potEntry.pot, unmatched: false, winners: orderedWinners });
+      }
     }
 
     // Apply payouts and unmatched returns to actual seat stacks and session totals.

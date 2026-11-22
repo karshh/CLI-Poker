@@ -334,6 +334,158 @@ test('PokerGameEngine preserves full $10 pre-flop bring-in when BB posts short a
   assert.equal(tieEnd.playerChips, 502);
 });
 
+test('PokerGameEngine combines folded layers before splitting a tied $60 pot and drops short-blind call to $5 for sole funded seat', () => {
+  // 1. Even $60 pot with folded contributions at $5 (SB), $10 (BB), $15 (UTG) and two tied active seats at $15 each (CO=You, BTN=Reginald):
+  //    Merging layers with identical eligible seats must pay $30 each (not $31 and $29 from splitting $25/$20/$15 separately).
+  let mergeHandIdx = 0;
+  let mergeRng = 0.99;
+  const makeMergedPotDeck = () => {
+    mergeHandIdx += 1;
+    if (mergeHandIdx === 1) {
+      // Hand 1 (initialButtonSeatIndex=0, oppChips=25): everyone calls $10 & checks down; Tony (4♠ 4♥) wins $50 -> Tony=$65, Reg/Buck/Elon=$15.
+      const cards = [
+        new Card('♥', '5'), new Card('♣', '9'), // Player (BTN)
+        new Card('♦', '5'), new Card('♠', '9'), // Seat 1: Reginald (SB -> ends $15)
+        new Card('♣', '6'), new Card('♦', '9'), // Seat 2: Buck (BB -> ends $15)
+        new Card('♥', '6'), new Card('♠', '8'), // Seat 3: Elon (UTG -> ends $15)
+        new Card('♠', '4'), new Card('♥', '4'), // Seat 4: Tony (CO -> wins $50 -> $65)
+        new Card('♣', '2'), new Card('♦', '3'), new Card('♠', 'J'),
+        new Card('♥', 'Q'),
+        new Card('♣', 'K'),
+      ];
+      return { draw: () => cards.shift()! };
+    }
+    // Hand 2 (rotates BTN=Reginald($15), SB=Buck($15), BB=Elon($15), UTG=Tony($65), CO=You($490)):
+    //   Pre-flop (mergeRng=0.20): Tony (0.25) calls $10, You call $10, Reginald (0.996) raises all-in to $15,
+    //   Buck (0.163) folds ($5), Elon (0.163) folds ($10), Tony calls $5 ($15), You call $5 ($15).
+    //   Flop (mergeRng=0.90): Tony checks, You bet $20, Tony folds ($15), $20 refunded to You ($15).
+    //   Showdown tie on A♠ 10♦ 8♣ 6♥ 4♠ between You (K♣ Q♦) and Reginald (K♦ Q♥) for a $60 pot!
+    const cards = [
+      new Card('♣', 'K'), new Card('♦', 'Q'), // Player (CO) -> ties A-K-Q-10-8
+      new Card('♦', 'K'), new Card('♥', 'Q'), // Seat 1: Reginald (BTN, $15) -> raises all-in $15, ties!
+      new Card('♣', '2'), new Card('♦', '3'), // Seat 2: Buck (SB, $15) -> folds $5
+      new Card('♥', '2'), new Card('♣', '3'), // Seat 3: Elon (BB, $15) -> folds $10
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (UTG, $65) -> calls $15 pre-flop, folds Flop
+      new Card('♠', 'A'), new Card('♦', '10'), new Card('♣', '8'), // Flop
+      new Card('♥', '6'), // Turn
+      new Card('♠', '4'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const mergeEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 25,
+    initialButtonSeatIndex: 0,
+    random: () => mergeRng,
+    deckFactory: makeMergedPotDeck,
+  });
+  mergeEngine.act('select_opponents:reginald,buck,elon,tony');
+  mergeEngine.act('hard'); // Hand 1: BTN=You
+  mergeEngine.act('call');
+  mergeEngine.act('check');
+  mergeEngine.act('check');
+  const mh1 = mergeEngine.act('check');
+  assert.equal(mh1.opponents.find((o) => o.id === 'tony')!.chips, 65);
+  assert.equal(mh1.opponents.find((o) => o.id === 'reginald')!.chips, 15);
+  assert.equal(mh1.playerChips, 490);
+
+  // Hand 2 pre-flop: Tony calls $10, You call $10 -> Reginald raises all-in to $15 -> Buck ($5) & Elon ($10) fold -> Tony calls $15 -> prompts You for $5
+  mergeRng = 0.2;
+  mergeEngine.act('yes');
+  const afterRegRaise = mergeEngine.act('call');
+  assert.equal(afterRegRaise.stage, 'player_response');
+  assert.equal(afterRegRaise.currentBet, 5);
+  // Enter Flop with mergeRng=0.90 so Tony folds to our $20 Flop bet
+  mergeRng = 0.9;
+  const flopState = mergeEngine.act('call');
+  assert.equal(flopState.streetName, 'Flop');
+  assert.equal(flopState.pot, 60);
+  const mh2 = mergeEngine.act('bet'); // Tony folds ($15), $20 uncalled refunded to You -> Turn/River runout -> $60 tie!
+  assert.equal(mh2.stage, 'hand_over');
+  assert.equal(mh2.pot, 60);
+  assert.equal(mh2.outcome?.result, 'tie');
+  const regH2 = mh2.opponents.find((o) => o.id === 'reginald')!;
+  assert.equal(regH2.totalPotWon, 30, 'Tied $60 pot must pay BTN exactly $30 (not $29)');
+  assert.equal(mh2.playerTotalPotWon, 30, 'Tied $60 pot must pay CO exactly $30 (not $31)');
+  assert.equal(regH2.chips, 30);
+  assert.equal(mh2.playerChips, 505); // 490 - 15 + 30 = 505
+
+  // 2. Sole remaining funded seat facing two $5 all-in blinds after funded UTG & CO fold:
+  //    Must be quoted Call $5 (not Call $10) in both prompt and action handler, with zero uncalled refund!
+  let shortCallHandIdx = 0;
+  let shortCallRng = 0.99;
+  const makeSoleFundedDeck = () => {
+    shortCallHandIdx += 1;
+    if (shortCallHandIdx === 1) {
+      // Hand 1 (initialButtonSeatIndex=4 -> BTN=Tony, SB=You($500), BB=Reginald($15), UTG=Buck($15), CO=Elon($15)):
+      //   Buck (4♠ 8♣, 0.50) calls $10; Elon (2♣ 5♦, 0.25) folds ($15 left); Tony (2♥ 5♣, 0.25) folds ($15 left);
+      //   You (SB, A♠ A♥) call $5; Reginald (BB, 4♦ 8♠, 0.50) checks -> check down -> You win $30!
+      //   End stacks: You=$520, Reginald=$5, Buck=$5, Elon=$15, Tony=$15.
+      const cards = [
+        new Card('♠', 'A'), new Card('♥', 'A'), // Player (SB -> wins $30 -> $520)
+        new Card('♦', '4'), new Card('♠', '8'), // Seat 1: Reginald (BB -> ends $5)
+        new Card('♠', '4'), new Card('♣', '8'), // Seat 2: Buck (UTG -> ends $5)
+        new Card('♣', '2'), new Card('♦', '5'), // Seat 3: Elon (CO -> folds -> $15)
+        new Card('♥', '2'), new Card('♣', '5'), // Seat 4: Tony (BTN -> folds -> $15)
+        new Card('♣', '3'), new Card('♦', '7'), new Card('♠', 'J'),
+        new Card('♥', '9'),
+        new Card('♣', 'K'),
+      ];
+      return { draw: () => cards.shift()! };
+    }
+    // Hand 2 (rotates BTN=You($520), SB=Reginald($5 all-in), BB=Buck($5 all-in), UTG=Elon($15), CO=Tony($15)):
+    //   Start has 3 funded seats -> bring-in begins at $10; Elon & Tony both fold -> You are sole funded seat!
+    const cards = [
+      new Card('♠', 'K'), new Card('♥', 'K'), // Player (BTN, $520 -> wins $15 pot)
+      new Card('♦', '4'), new Card('♠', '8'), // Seat 1: Reginald (SB $5 all-in)
+      new Card('♠', '4'), new Card('♣', '8'), // Seat 2: Buck (BB $5 all-in)
+      new Card('♣', '2'), new Card('♦', '5'), // Seat 3: Elon (UTG $15 -> folds!)
+      new Card('♥', '2'), new Card('♣', '5'), // Seat 4: Tony (CO $15 -> folds!)
+      new Card('♣', '3'), new Card('♦', '7'), new Card('♠', 'J'),
+      new Card('♥', '9'),
+      new Card('♣', 'Q'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const soleEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 15,
+    initialButtonSeatIndex: 4,
+    random: () => shortCallRng,
+    deckFactory: makeSoleFundedDeck,
+  });
+  soleEngine.act('select_opponents:reginald,buck,elon,tony');
+  soleEngine.act('hard'); // Hand 1: SB=You
+  soleEngine.act('call'); // Pre-flop $5
+  soleEngine.act('check'); // Flop
+  soleEngine.act('check'); // Turn
+  const sh1 = soleEngine.act('check'); // River -> You win $30
+  assert.equal(sh1.opponents.find((o) => o.id === 'reginald')!.chips, 5);
+  assert.equal(sh1.opponents.find((o) => o.id === 'buck')!.chips, 5);
+  assert.equal(sh1.opponents.find((o) => o.id === 'elon')!.chips, 15);
+  assert.equal(sh1.opponents.find((o) => o.id === 'tony')!.chips, 15);
+
+  const sh2Prompt = soleEngine.act('yes'); // Hand 2: SB & BB post $5 all-in; Elon & Tony fold -> prompts BTN (You)
+  assert.equal(sh2Prompt.playerPosition, 'BTN');
+  assert.equal(sh2Prompt.stage, 'player_response');
+  assert.equal(sh2Prompt.currentBet, 5, 'Effective call must drop from $10 to $5 when player is sole funded seat');
+  assert.equal(sh2Prompt.prompt?.choices.find((c) => c.id === 'call')?.label, 'Call $5');
+  assert.equal(sh2Prompt.prompt?.choices.find((c) => c.id === 'bet'), undefined, 'No raise option when no other funded seat remains');
+  assert.match(sh2Prompt.dealerSpeech, /\$5 to call/);
+
+  const sh2End = soleEngine.act('call');
+  assert.equal(sh2End.stage, 'hand_over');
+  assert.equal(sh2End.playerHandContribution, 5, 'Action handler must wager $5, not $10');
+  assert.equal(sh2End.pot, 15);
+  assert.equal(sh2End.playerChips, 530); // 520 - 5 + 15
+  assert.ok(
+    !sh2End.narrative.slice(-8).some((entry) => entry.text.includes('Uncalled bet')),
+    'No uncalled excess should be wagered or refunded when calling $5',
+  );
+});
+
 test('PokerGameEngine reveals folded opponents’ cards and reveals all players’ cards when player folds and hand ends', () => {
   const engine = new PokerGameEngine({ random: () => 0.5 });
   engine.act('select_opponents:reginald,buck,elon,tony');
