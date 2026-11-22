@@ -861,11 +861,11 @@
     }
   }
 
-  // Open Opponent Picker Button (only between hands; opens native dialog without mutating server stage)
+  // Open Opponent Picker Button (only between hands, never mid-hand or after cash out)
   if (elPickOpponentsBtn) {
     elPickOpponentsBtn.addEventListener('click', () => {
       if (isActionLocked) return;
-      if (currentState && isHandActiveStage(currentState.stage)) return;
+      if (currentState && (isHandActiveStage(currentState.stage) || currentState.stage === 'game_over')) return;
       pickerOpenedManually = true;
       if (currentState) {
         renderOpponentPickerModal(currentState);
@@ -1431,11 +1431,14 @@
     currentState = state;
 
     if (elPickOpponentsBtn) {
-      const handInProgress = isHandActiveStage(state.stage);
-      elPickOpponentsBtn.disabled = handInProgress;
-      elPickOpponentsBtn.title = handInProgress
-        ? 'Finish or fold the current hand to change opponents'
-        : 'Choose 4 opponents from the 8 VIP characters';
+      const pickerDisabled = isHandActiveStage(state.stage) || state.stage === 'game_over';
+      elPickOpponentsBtn.disabled = pickerDisabled;
+      elPickOpponentsBtn.title =
+        state.stage === 'game_over'
+          ? 'Start a new session to select opponents'
+          : isHandActiveStage(state.stage)
+            ? 'Finish or fold the current hand to change opponents'
+            : 'Choose 4 opponents from the 8 VIP characters';
     }
     if (elBtnRandomOpps) elBtnRandomOpps.disabled = false;
 
@@ -1597,7 +1600,7 @@
     });
   }
 
-  // Send Player Action to Server (locked synchronously BEFORE fetch starts!)
+  // Send Player Action to Server (locked synchronously BEFORE fetch starts, with stateRevision guard!)
   async function sendAction(action) {
     if (isActionLocked) return;
     isActionLocked = true;
@@ -1605,12 +1608,25 @@
     ensureAudio();
 
     try {
+      const payload = { action };
+      if (currentState && typeof currentState.stateRevision === 'number') {
+        payload.stateRevision = currentState.stateRevision;
+      }
       const res = await fetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (res.status === 409 && data && data.code === 'STALE_STATE') {
+        const freshState = data.state || (await (await fetch('/api/state')).json());
+        isActionLocked = false;
+        renderState(freshState, { skipActionSfx: true });
+        if (elDialogueMainText) {
+          elDialogueMainText.textContent = 'Table updated in another tab — refreshed to latest state.';
+        }
+        return;
+      }
       if (!res.ok || data.error) {
         console.error('Action error:', data.error || res.status);
         if (currentState) renderState(currentState, { skipActionSfx: true });
@@ -1625,17 +1641,41 @@
     }
   }
 
+  function isInteractiveFocusedElement(el) {
+    if (!el || !(el instanceof HTMLElement)) return false;
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+      return true;
+    }
+    return el.getAttribute('role') === 'button';
+  }
+
   // Global Keyboard Navigation
   window.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = e.key.toLowerCase();
-    // Do not intercept global shortcuts when native opponent dialog is open (except M mute)
     const dialogOpen = Boolean(elOppModalOverlay && elOppModalOverlay.open);
+
     if (key === 'm') {
       const active = sfx.toggle();
       elSoundIcon.textContent = active ? '🔊' : '🔇';
       return;
     }
-    if (dialogOpen) return;
+
+    if (dialogOpen) {
+      // Support README 'R' shortcut for Random 4 Opponents while the opponent picker dialog is open
+      if (key === 'r' && !isActionLocked && elBtnRandomOpps && !elBtnRandomOpps.disabled) {
+        e.preventDefault();
+        elBtnRandomOpps.click();
+      }
+      return;
+    }
+
+    // Preserve native Space / Enter activation when a button or interactive element has keyboard focus
+    if ((key === ' ' || key === 'enter') && isInteractiveFocusedElement(document.activeElement)) {
+      return;
+    }
+
     if (key === 'p') {
       togglePotsWindow();
       return;
@@ -1647,12 +1687,43 @@
     }
   });
 
+  // Dynamically fit the 3D table scene against BOTH available viewport width and height
+  // (prevents clipping on narrow portrait phones AND short landscape viewports like 844x390)
+  const elPovViewport = document.querySelector('.pov-viewport');
+  const elTableScene = document.querySelector('.table-scene');
+
+  function fitTableScene() {
+    if (!elPovViewport || !elTableScene) return;
+    const vpRect = elPovViewport.getBoundingClientRect();
+    if (vpRect.width <= 0 || vpRect.height <= 0) return;
+
+    const availW = Math.max(200, vpRect.width - 12);
+    const availH = Math.max(120, vpRect.height - 12);
+    // Projected 3D table spans ~1110px wide; dealer chair top (-78px) to table rail bottom (+450px) spans ~535px tall
+    const scaleX = availW / 1115;
+    const scaleY = availH / 540;
+    const scale = Math.max(0.22, Math.min(1, scaleX, scaleY));
+
+    // Shift downward proportionally so dealer's head/chair (-54px..-78px above scene top) never clips at top edge
+    const marginTop = Math.round(62 * scale);
+    elTableScene.style.transform = `scale(${scale.toFixed(4)})`;
+    elTableScene.style.marginTop = `${marginTop}px`;
+  }
+
+  window.addEventListener('resize', fitTableScene);
+  if (typeof ResizeObserver === 'function' && elPovViewport) {
+    const ro = new ResizeObserver(() => fitTableScene());
+    ro.observe(elPovViewport);
+  }
+  fitTableScene();
+
   // Fetch Initial State on Load
   async function fetchInitialState() {
     try {
       const res = await fetch('/api/state');
       const data = await res.json();
       renderState(data);
+      fitTableScene();
       sfx.playCardDeal();
     } catch (err) {
       console.error('Failed to load initial state:', err);

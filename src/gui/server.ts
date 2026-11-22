@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PokerGameEngine } from './engine.js';
+import { PokerGameEngine, StaleStateError } from './engine.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const MAX_ACTION_BODY_BYTES = 1024;
@@ -249,14 +249,34 @@ export function createPokerRequestHandler(
           if (rejected || res.headersSent) return;
           try {
             const rawBody = Buffer.concat(chunks, totalBytes).toString('utf8');
-            const data = JSON.parse(rawBody || '{}') as { action?: unknown };
+            const data = JSON.parse(rawBody || '{}') as { action?: unknown; stateRevision?: unknown };
             if (typeof data.action !== 'string') {
               sendJson(res, 400, { error: 'Missing action string in body' });
               return;
             }
-            const newState = engine.act(data.action);
+            let expectedRevision: number | undefined;
+            if (data.stateRevision !== undefined) {
+              if (
+                typeof data.stateRevision !== 'number' ||
+                !Number.isInteger(data.stateRevision) ||
+                data.stateRevision < 1
+              ) {
+                sendJson(res, 400, { error: 'Invalid stateRevision in body' });
+                return;
+              }
+              expectedRevision = data.stateRevision;
+            }
+            const newState = engine.act(data.action, expectedRevision);
             sendJson(res, 200, newState);
           } catch (err) {
+            if (err instanceof StaleStateError) {
+              sendJson(res, 409, {
+                error: err.message,
+                code: err.code,
+                state: engine.getState(),
+              });
+              return;
+            }
             const message = err instanceof Error ? err.message : String(err);
             sendJson(res, 400, { error: message });
           }

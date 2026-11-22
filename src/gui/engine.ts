@@ -37,6 +37,21 @@ export type GameStage =
   | 'hand_over'
   | 'game_over';
 
+export class StaleStateError extends Error {
+  public readonly code = 'STALE_STATE';
+  public readonly expectedRevision: number;
+  public readonly currentRevision: number;
+
+  constructor(expectedRevision: number, currentRevision: number) {
+    super(
+      `Stale action submission (client revision ${expectedRevision}, server revision ${currentRevision}). Refreshing table state.`,
+    );
+    this.name = 'StaleStateError';
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
+}
+
 export interface PromptChoice {
   id: string;
   label: string;
@@ -46,6 +61,7 @@ export interface PromptChoice {
 
 export interface PromptInfo {
   type: GameStage;
+  revision: number;
   message: string;
   choices: PromptChoice[];
 }
@@ -115,6 +131,7 @@ export interface TurnEvent {
 }
 
 export interface SerializedGameState {
+  stateRevision: number;
   stage: GameStage;
   mode: Mode | null;
   streetIndex: number;
@@ -373,6 +390,36 @@ export interface PokerGameEngineOptions {
   initialPlayerChips?: number;
   initialOpponentChips?: number;
   random?: () => number;
+  deckFactory?: () => Pick<Deck, 'draw'>;
+}
+
+interface SeatLedgerEntry {
+  chips: number;
+  totalPotWon: number;
+  handsWon: number;
+}
+
+interface PotSeat {
+  id: string;
+  name: string;
+  isPlayer: boolean;
+  contribution: number;
+  active: boolean;
+  cards: Card[] | null;
+  opp?: InternalOpponent;
+}
+
+interface PotSliceAward {
+  slicePot: number;
+  unmatched: boolean;
+  winners: PotSeat[];
+}
+
+interface PotSettlementSummary {
+  payoutById: Map<string, number>;
+  unmatchedById: Map<string, number>;
+  slices: PotSliceAward[];
+  bestOverallWinners: PotSeat[];
 }
 
 function pickFourOpponents(random: () => number = Math.random): OpponentProfile[] {
@@ -388,8 +435,11 @@ function pickFourOpponents(random: () => number = Math.random): OpponentProfile[
 
 export class PokerGameEngine {
   private readonly random: () => number;
+  private readonly deckFactory: () => Pick<Deck, 'draw'>;
+  private readonly defaultPlayerChips: number;
   private readonly defaultOpponentChips: number;
-  private deck: Deck = new Deck();
+  private deck: Pick<Deck, 'draw'> = new Deck();
+  private stateRevision = 1;
   private mode: Mode | null = null;
   private stage: GameStage = 'select_opponents';
   private streetIndex = 0;
@@ -401,6 +451,7 @@ export class PokerGameEngine {
   private playerFolded = false;
   private playerCards: [Card, Card] | null = null;
   private opponents: InternalOpponent[] = [];
+  private opponentLedger = new Map<OpponentId, SeatLedgerEntry>();
   private board: Card[] = [];
   private dealerSpeech = 'Welcome to the VIP High Roller Lounge! Choose 4 opponents to join your table.';
   private narrative: NarrativeEntry[] = [];
@@ -414,7 +465,9 @@ export class PokerGameEngine {
 
   constructor(options: PokerGameEngineOptions = {}) {
     this.random = options.random ?? Math.random;
-    this.playerChips = options.initialPlayerChips ?? 500;
+    this.deckFactory = options.deckFactory ?? (() => new Deck());
+    this.defaultPlayerChips = options.initialPlayerChips ?? 500;
+    this.playerChips = this.defaultPlayerChips;
     this.defaultOpponentChips = options.initialOpponentChips ?? 500;
     this.stage = 'select_opponents';
     this.seatOpponents(pickFourOpponents(this.random));
@@ -426,22 +479,36 @@ export class PokerGameEngine {
     ];
   }
 
+  private saveOpponentsToLedger(): void {
+    for (const opp of this.opponents) {
+      this.opponentLedger.set(opp.profile.id, {
+        chips: opp.chips,
+        totalPotWon: opp.totalPotWon,
+        handsWon: opp.handsWon,
+      });
+    }
+  }
+
   private seatOpponents(profiles: readonly OpponentProfile[]): void {
-    this.opponents = profiles.slice(0, 4).map((profile, idx) => ({
-      profile,
-      seat: TABLE_SEATS[idx]!,
-      chips: this.defaultOpponentChips,
-      handContribution: 0,
-      totalPotWon: 0,
-      handsWon: 0,
-      cards: null,
-      cardsHidden: true,
-      folded: false,
-      lastAction: null,
-      speech: profile.introLine,
-      reaction: 'neutral',
-      rank: null,
-    }));
+    this.saveOpponentsToLedger();
+    this.opponents = profiles.slice(0, 4).map((profile, idx) => {
+      const saved = this.opponentLedger.get(profile.id);
+      return {
+        profile,
+        seat: TABLE_SEATS[idx]!,
+        chips: saved ? saved.chips : this.defaultOpponentChips,
+        handContribution: 0,
+        totalPotWon: saved ? saved.totalPotWon : 0,
+        handsWon: saved ? saved.handsWon : 0,
+        cards: null,
+        cardsHidden: true,
+        folded: false,
+        lastAction: null,
+        speech: profile.introLine,
+        reaction: 'neutral',
+        rank: null,
+      };
+    });
   }
 
   private isHandActive(): boolean {
@@ -536,6 +603,7 @@ export class PokerGameEngine {
           : streetBet;
 
     return {
+      stateRevision: this.stateRevision,
       stage: this.stage,
       mode: this.mode,
       streetIndex: this.streetIndex,
@@ -595,24 +663,34 @@ export class PokerGameEngine {
     });
   }
 
-  public act(rawAction: string): SerializedGameState {
+  public act(rawAction: string, expectedRevision?: number): SerializedGameState {
+    if (expectedRevision !== undefined && expectedRevision !== this.stateRevision) {
+      throw new StaleStateError(expectedRevision, this.stateRevision);
+    }
     const action = rawAction.trim().toLowerCase();
     this.turnEvents = [];
     this.turnStartPot = this.pot;
 
-    // Restrict opening/changing opponent roster strictly to between hands so an active pot is never lost
+    // Restrict opening/changing opponent roster strictly to between hands (never mid-hand or after cash out)
     if (action === 'open_opponent_select') {
       if (this.isHandActive()) {
         throw new Error('Cannot change opponents during an active hand. Finish or fold the current hand first.');
       }
+      if (this.stage === 'game_over') {
+        throw new Error('Session is over. Send restart to start a new session before selecting opponents.');
+      }
       this.stage = 'select_opponents';
       this.dealerSpeech = 'Choose 4 opponents from our VIP roster for your table.';
+      this.stateRevision += 1;
       return this.getState();
     }
 
     if (action.startsWith('select_opponents:')) {
       if (this.isHandActive()) {
         throw new Error('Cannot change opponents during an active hand. Finish or fold the current hand first.');
+      }
+      if (this.stage === 'game_over') {
+        throw new Error('Session is over. Send restart to start a new session before selecting opponents.');
       }
       const idList = action
         .slice('select_opponents:'.length)
@@ -642,12 +720,16 @@ export class PokerGameEngine {
         this.stage = 'select_mode';
         this.dealerSpeech = 'Opponents seated! Now select your table difficulty.';
       }
+      this.stateRevision += 1;
       return this.getState();
     }
 
     if (action === 'new_table' || action === 'random_opponents') {
       if (this.isHandActive()) {
         throw new Error('Cannot change opponents during an active hand. Finish or fold the current hand first.');
+      }
+      if (this.stage === 'game_over') {
+        throw new Error('Session is over. Send restart to start a new session before selecting opponents.');
       }
       this.seatOpponents(pickFourOpponents(this.random));
       const names = this.opponents.map((o) => o.profile.name).join(', ');
@@ -658,6 +740,7 @@ export class PokerGameEngine {
         this.stage = 'select_mode';
         this.dealerSpeech = 'Random table seated! Now select your table difficulty.';
       }
+      this.stateRevision += 1;
       return this.getState();
     }
 
@@ -670,6 +753,7 @@ export class PokerGameEngine {
           text: `Difficulty set to ${this.mode.toUpperCase()}. Opponents: ${names}.`,
         });
         this.startNewHand();
+        this.stateRevision += 1;
         return this.getState();
       }
       if (this.stage === 'select_opponents') {
@@ -686,6 +770,7 @@ export class PokerGameEngine {
 
       if (action === 'fold') {
         this.handlePlayerFold(false);
+        this.stateRevision += 1;
         return this.getState();
       }
 
@@ -694,7 +779,7 @@ export class PokerGameEngine {
         if (betAmt <= 0) {
           throw new Error('Insufficient chips to bet; please check or fold.');
         }
-        const isAllIn = betAmt < currentStreet.bet;
+        const isAllIn = betAmt < currentStreet.bet || this.playerChips - betAmt === 0;
         this.pot += betAmt;
         this.playerChips -= betAmt;
         this.playerHandContribution += betAmt;
@@ -730,6 +815,7 @@ export class PokerGameEngine {
 
         if (this.getActiveOpponents().length === 0) {
           this.handleAllOpponentsFold();
+          this.stateRevision += 1;
           return this.getState();
         }
 
@@ -743,6 +829,7 @@ export class PokerGameEngine {
         this.lastAction = { actor: 'opponent', action: 'call', amount: betAmt };
 
         this.advanceStreet();
+        this.stateRevision += 1;
         return this.getState();
       }
 
@@ -835,10 +922,12 @@ export class PokerGameEngine {
           if (this.playerChips <= 0) {
             this.narrative.push({ speaker: 'You', text: 'You are already all-in and stay in the hand.' });
             this.advanceStreet();
+            this.stateRevision += 1;
             return this.getState();
           }
 
           this.stage = 'player_response';
+          this.stateRevision += 1;
           return this.getState();
         }
 
@@ -847,6 +936,7 @@ export class PokerGameEngine {
         this.narrative.push({ speaker: 'Dealer', text: 'All active players check.' });
 
         this.advanceStreet();
+        this.stateRevision += 1;
         return this.getState();
       }
 
@@ -861,12 +951,13 @@ export class PokerGameEngine {
 
       if (action === 'fold') {
         this.handlePlayerFold(true);
+        this.stateRevision += 1;
         return this.getState();
       }
 
       if (action === 'call') {
         const callAmt = this.getLegalPlayerCallAmount();
-        const isAllIn = callAmt < this.currentStreetWager;
+        const isAllIn = callAmt < this.currentStreetWager || this.playerChips - callAmt === 0;
         this.pot += callAmt;
         this.playerChips -= callAmt;
         this.playerHandContribution += callAmt;
@@ -882,6 +973,7 @@ export class PokerGameEngine {
         });
 
         this.advanceStreet();
+        this.stateRevision += 1;
         return this.getState();
       }
 
@@ -891,12 +983,14 @@ export class PokerGameEngine {
     if (this.stage === 'hand_over') {
       if (action === 'yes' || action === 'y' || action === 'again') {
         this.startNewHand();
+        this.stateRevision += 1;
         return this.getState();
       }
       if (action === 'no' || action === 'n' || action === 'quit') {
         this.stage = 'game_over';
         this.dealerSpeech = 'Thanks for playing at the VIP High Roller table!';
         this.narrative.push({ speaker: 'Dealer', text: 'Session finished. Thank you for playing!' });
+        this.stateRevision += 1;
         return this.getState();
       }
       throw new Error(`Invalid choice: ${action}. Expected yes or no.`);
@@ -905,6 +999,7 @@ export class PokerGameEngine {
     if (this.stage === 'game_over') {
       if (action === 'restart' || action === 'yes' || action === 'y') {
         this.resetSession();
+        this.stateRevision += 1;
         return this.getState();
       }
       throw new Error('Game is over. Send restart to play again.');
@@ -914,19 +1009,20 @@ export class PokerGameEngine {
   }
 
   private resetSession(): void {
-    this.deck = new Deck();
+    this.deck = this.deckFactory();
     this.mode = null;
     this.stage = 'select_opponents';
     this.streetIndex = 0;
     this.pot = 0;
     this.turnStartPot = 0;
     this.turnEvents = [];
-    this.playerChips = 500;
+    this.playerChips = this.defaultPlayerChips;
     this.playerHandContribution = 0;
     this.playerTotalPotWon = 0;
     this.playerHandsWon = 0;
     this.playerFolded = false;
     this.playerCards = null;
+    this.opponentLedger.clear();
     this.board = [];
     this.outcome = null;
     this.handCount = 0;
@@ -1008,7 +1104,7 @@ export class PokerGameEngine {
     }
 
     this.handCount += 1;
-    this.deck = new Deck();
+    this.deck = this.deckFactory();
     this.playerCards = [this.deck.draw(), this.deck.draw()];
     this.playerHandContribution = 0;
     this.playerFolded = false;
@@ -1042,7 +1138,47 @@ export class PokerGameEngine {
     });
   }
 
+  private dealNextCommunityCards(streetIdx: number): void {
+    if (streetIdx === 1) {
+      this.board.push(this.deck.draw(), this.deck.draw(), this.deck.draw());
+    } else if (streetIdx === 2 || streetIdx === 3) {
+      this.board.push(this.deck.draw());
+    }
+  }
+
   private advanceStreet(): void {
+    // If the player is already committed all-in (0 chips remaining), never prompt them to check/fold
+    // (which could forfeit pot eligibility). Run out remaining streets, letting opponents with chips
+    // contest side pots, then resolve showdown.
+    if (this.playerChips <= 0 && !this.playerFolded) {
+      while (this.streetIndex < STREETS.length - 1) {
+        this.streetIndex += 1;
+        this.currentStreetWager = 0;
+        for (const opp of this.opponents) {
+          opp.speech = '';
+          if (!opp.folded) opp.lastAction = null;
+        }
+        this.dealNextCommunityCards(this.streetIndex);
+        const street = STREETS[this.streetIndex];
+        if (street) {
+          const cardsText =
+            this.streetIndex === 1
+              ? this.board.map((c) => c.toString()).join(', ')
+              : (this.board[this.board.length - 1]?.toString() ?? '');
+          this.narrative.push({
+            speaker: 'Dealer',
+            text: `${street.name} dealt: [${cardsText}]. You are all-in.`,
+          });
+          const opponentsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
+          if (opponentsWithChips.length >= 2) {
+            this.runOpponentsOnlyStreet(street.bet);
+          }
+        }
+      }
+      this.finishShowdown();
+      return;
+    }
+
     this.streetIndex += 1;
     this.currentStreetWager = 0;
 
@@ -1054,7 +1190,7 @@ export class PokerGameEngine {
     }
 
     if (this.streetIndex === 1) {
-      this.board.push(this.deck.draw(), this.deck.draw(), this.deck.draw());
+      this.dealNextCommunityCards(1);
       this.stage = 'player_action';
       const street = STREETS[1];
       this.dealerSpeech = `Flop: ${this.board.map((c) => c.toString()).join('  ')}. Bet is $${street.bet}.`;
@@ -1066,7 +1202,7 @@ export class PokerGameEngine {
     }
 
     if (this.streetIndex === 2) {
-      this.board.push(this.deck.draw());
+      this.dealNextCommunityCards(2);
       this.stage = 'player_action';
       const street = STREETS[2];
       this.dealerSpeech = `Turn: ${this.board[3]?.toString()}. Bet is $${street.bet}.`;
@@ -1078,7 +1214,7 @@ export class PokerGameEngine {
     }
 
     if (this.streetIndex === 3) {
-      this.board.push(this.deck.draw());
+      this.dealNextCommunityCards(3);
       this.stage = 'player_action';
       const street = STREETS[3];
       this.dealerSpeech = `River: ${this.board[4]?.toString()}. Final betting round: $${street.bet}.`;
@@ -1159,6 +1295,88 @@ export class PokerGameEngine {
     return this.getActiveOpponents().length <= 1;
   }
 
+  /**
+   * Builds main pot and any side pots from each seat's contribution, returns unmatched wagers
+   * to a sole top contributor, and distributes every eligible slice to the best hand(s) among
+   * active contenders who contributed at least to that level.
+   */
+  private settlePots(seats: readonly PotSeat[]): PotSettlementSummary {
+    const payoutById = new Map<string, number>();
+    const unmatchedById = new Map<string, number>();
+    const slices: PotSliceAward[] = [];
+
+    const activeSeats = seats.filter((s) => s.active);
+    const compareBest = (eligible: readonly PotSeat[]): PotSeat[] => {
+      if (eligible.length <= 1) return [...eligible];
+      let winners: PotSeat[] = [eligible[0]!];
+      for (let i = 1; i < eligible.length; i += 1) {
+        const candidate = eligible[i]!;
+        if (!candidate.cards || !winners[0]?.cards) continue;
+        const cmp = compareHands(candidate.cards, winners[0].cards);
+        if (cmp > 0) {
+          winners = [candidate];
+        } else if (cmp === 0) {
+          winners.push(candidate);
+        }
+      }
+      return winners;
+    };
+
+    const bestOverallWinners = compareBest(activeSeats);
+    const levels = [...new Set(seats.map((s) => s.contribution).filter((c) => c > 0))].sort((a, b) => a - b);
+
+    let prevLevel = 0;
+    for (const level of levels) {
+      const width = level - prevLevel;
+      const contributors = seats.filter((s) => s.contribution >= level);
+      const slicePot = width * contributors.length;
+      const eligible = activeSeats.filter((s) => s.contribution >= level);
+
+      if (contributors.length === 1 && contributors[0]!.active) {
+        // Sole unmatched top wager: return directly to that seat's stack
+        const sole = contributors[0]!;
+        unmatchedById.set(sole.id, (unmatchedById.get(sole.id) ?? 0) + slicePot);
+        slices.push({ slicePot, unmatched: true, winners: [sole] });
+      } else {
+        const sliceContenders = eligible.length > 0 ? eligible : activeSeats;
+        const sliceWinners = compareBest(sliceContenders);
+        if (sliceWinners.length > 0) {
+          const share = Math.floor(slicePot / sliceWinners.length);
+          let remainder = slicePot - share * sliceWinners.length;
+          for (const w of sliceWinners) {
+            const award = share + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder -= 1;
+            payoutById.set(w.id, (payoutById.get(w.id) ?? 0) + award);
+          }
+          slices.push({ slicePot, unmatched: false, winners: sliceWinners });
+        }
+      }
+
+      prevLevel = level;
+    }
+
+    // Apply payouts and unmatched returns to actual seat stacks and session totals
+    for (const seat of seats) {
+      const payout = payoutById.get(seat.id) ?? 0;
+      const unmatched = unmatchedById.get(seat.id) ?? 0;
+      if (seat.isPlayer) {
+        this.playerChips += payout + unmatched;
+        if (payout > 0) {
+          this.playerTotalPotWon += payout;
+          this.playerHandsWon += 1;
+        }
+      } else if (seat.opp) {
+        seat.opp.chips += payout + unmatched;
+        if (payout > 0) {
+          seat.opp.totalPotWon += payout;
+          seat.opp.handsWon += 1;
+        }
+      }
+    }
+
+    return { payoutById, unmatchedById, slices, bestOverallWinners };
+  }
+
   private handlePlayerFold(currentStreetAlreadyBet: boolean): void {
     if (!this.playerCards) return;
 
@@ -1186,20 +1404,18 @@ export class PokerGameEngine {
         opp.speech = '';
         if (!opp.folded) opp.lastAction = null;
       }
+      this.dealNextCommunityCards(this.streetIndex);
       if (this.streetIndex === 1) {
-        this.board.push(this.deck.draw(), this.deck.draw(), this.deck.draw());
         this.narrative.push({
           speaker: 'Dealer',
           text: `Flop dealt: [${this.board.map((c) => c.toString()).join(', ')}]. Remaining opponents act.`,
         });
       } else if (this.streetIndex === 2) {
-        this.board.push(this.deck.draw());
         this.narrative.push({
           speaker: 'Dealer',
           text: `Turn dealt: [${this.board[3]?.toString()}]. Remaining opponents act.`,
         });
       } else if (this.streetIndex === 3) {
-        this.board.push(this.deck.draw());
         this.narrative.push({
           speaker: 'Dealer',
           text: `River dealt: [${this.board[4]?.toString()}]. Remaining opponents act.`,
@@ -1208,7 +1424,10 @@ export class PokerGameEngine {
 
       const street = STREETS[this.streetIndex];
       if (street) {
-        this.runOpponentsOnlyStreet(street.bet);
+        const opponentsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
+        if (opponentsWithChips.length >= 2) {
+          this.runOpponentsOnlyStreet(street.bet);
+        }
       }
     }
 
@@ -1218,38 +1437,39 @@ export class PokerGameEngine {
     }
 
     const active = this.getActiveOpponents();
-    const contenders = active.length > 0 ? active : [this.getPrimaryOpponent()];
-    let potWinners: InternalOpponent[];
-    let wonUncontested = false;
+    const wonUncontested = active.length === 1;
+    const seats: PotSeat[] = [
+      {
+        id: 'player',
+        name: 'You',
+        isPlayer: true,
+        contribution: this.playerHandContribution,
+        active: false,
+        cards: null,
+      },
+      ...this.opponents.map((opp) => ({
+        id: opp.profile.id,
+        name: opp.profile.name,
+        isPlayer: false,
+        contribution: opp.handContribution,
+        active: !opp.folded || (active.length === 0 && opp === this.getPrimaryOpponent()),
+        cards: opp.cards && this.board.length >= 3 ? [...opp.cards, ...this.board] : null,
+        opp,
+      })),
+    ];
 
-    if (contenders.length === 1) {
-      potWinners = [contenders[0]!];
-      wonUncontested = true;
-    } else {
-      potWinners = [contenders[0]!];
-      for (let i = 1; i < contenders.length; i += 1) {
-        const candidate = contenders[i]!;
-        if (!candidate.cards || !potWinners[0]?.cards) continue;
-        const cmp = compareHands([...candidate.cards, ...this.board], [...potWinners[0].cards, ...this.board]);
-        if (cmp > 0) {
-          potWinners = [candidate];
-        } else if (cmp === 0) {
-          potWinners.push(candidate);
-        }
-      }
-    }
+    const settlement = this.settlePots(seats);
+    const winningOpps = this.opponents.filter((o) => (settlement.payoutById.get(o.profile.id) ?? 0) > 0);
+    const potWinners =
+      winningOpps.length > 0
+        ? winningOpps
+        : settlement.bestOverallWinners.map((w) => w.opp).filter((o): o is InternalOpponent => Boolean(o));
 
-    const share = Math.floor(this.pot / potWinners.length);
-    let remainder = this.pot - share * potWinners.length;
     for (const winner of potWinners) {
-      const payout = share + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder -= 1;
-      winner.chips += payout;
-      winner.totalPotWon += payout;
-      winner.handsWon += 1;
       winner.reaction = 'celebrating';
       winner.speech = winner.profile.winLine;
-      winner.lastAction = 'Wins Pot';
+      const amt = settlement.payoutById.get(winner.profile.id) ?? 0;
+      winner.lastAction = amt > 0 ? `Wins $${amt}` : 'Wins Pot';
     }
 
     const winnerNames = potWinners.map((w) => w.profile.name);
@@ -1258,7 +1478,7 @@ export class PokerGameEngine {
     const resolutionDetail = wonUncontested
       ? 'as the last player standing'
       : 'after the remaining seats played out the hand';
-    const explanation = `You folded! ${winnerLabel} ${potWinners.length > 1 ? 'split' : 'won'} the $${this.pot} pot ${resolutionDetail}.`;
+    const explanation = `You folded! ${winnerLabel} ${potWinners.length > 1 ? 'collected' : 'won'} the $${this.pot} pot ${resolutionDetail}.`;
 
     this.dealerSpeech = explanation;
     this.narrative.push({ speaker: 'Dealer', text: explanation });
@@ -1331,19 +1551,28 @@ export class PokerGameEngine {
       contenders.push({ isPlayer: false, name: opp.profile.name, cards: oppFull, rank: oppRank, opp });
     }
 
-    let winners: Contender[] = [contenders[0]!];
-    for (let i = 1; i < contenders.length; i += 1) {
-      const c = contenders[i]!;
-      const cmp = compareHands(c.cards, winners[0]!.cards);
-      if (cmp > 0) {
-        winners = [c];
-      } else if (cmp === 0) {
-        winners.push(c);
-      }
-    }
+    const seats: PotSeat[] = [
+      {
+        id: 'player',
+        name: 'You',
+        isPlayer: true,
+        contribution: this.playerHandContribution,
+        active: !this.playerFolded,
+        cards: playerFull,
+      },
+      ...this.opponents.map((opp) => ({
+        id: opp.profile.id,
+        name: opp.profile.name,
+        isPlayer: false,
+        contribution: opp.handContribution,
+        active: !opp.folded && Boolean(opp.cards),
+        cards: opp.cards ? [...opp.cards, ...this.board] : null,
+        opp,
+      })),
+    ];
 
-    const playerInWinners = winners.some((w) => w.isPlayer);
-    const winningOpponents = winners.filter((w) => !w.isPlayer);
+    const settlement = this.settlePots(seats);
+    const playerPayout = settlement.payoutById.get('player') ?? 0;
 
     const oppContenders = contenders.filter((c) => !c.isPlayer);
     let bestOpp = oppContenders[0]!;
@@ -1354,29 +1583,26 @@ export class PokerGameEngine {
     }
 
     const oppBreakdown = oppContenders.map((c) => `${c.name}: ${c.rank.name}`).join(', ');
+    const contestedSlices = settlement.slices.filter((s) => !s.unmatched);
+    const hasSidePots = contestedSlices.length > 1;
+    const playerOverallBest = settlement.bestOverallWinners.some((w) => w.isPlayer);
+    const tiedOpponentsOverall = settlement.bestOverallWinners.filter((w) => !w.isPlayer);
 
-    const share = Math.floor(this.pot / winners.length);
-    let remainder = this.pot - share * winners.length;
-    for (const w of winners) {
-      const payout = share + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder -= 1;
-      if (w.isPlayer) {
-        this.playerChips += payout;
-        this.playerTotalPotWon += payout;
-        this.playerHandsWon += 1;
-      } else if (w.opp) {
-        w.opp.chips += payout;
-        w.opp.totalPotWon += payout;
-        w.opp.handsWon += 1;
-      }
-    }
-
-    const winnerSet = new Set(winners.map((w) => w.opp?.profile.id));
     for (const opp of activeOpponents) {
-      if (winnerSet.has(opp.profile.id)) {
-        opp.reaction = winners.length > 1 ? 'neutral' : 'celebrating';
-        opp.speech = winners.length > 1 ? opp.profile.tieLine : opp.profile.winLine;
-        opp.lastAction = winners.length > 1 ? `Tie (${opp.rank?.name})` : `Wins (${opp.rank?.name})`;
+      const oppPayout = settlement.payoutById.get(opp.profile.id) ?? 0;
+      const isOverallBest = settlement.bestOverallWinners.some((w) => w.id === opp.profile.id);
+      if (oppPayout > 0 || (this.pot === 0 && isOverallBest)) {
+        const tied = settlement.bestOverallWinners.length > 1 && isOverallBest && !hasSidePots;
+        opp.reaction = tied ? 'neutral' : 'celebrating';
+        opp.speech = tied ? opp.profile.tieLine : opp.profile.winLine;
+        opp.lastAction =
+          oppPayout > 0
+            ? hasSidePots
+              ? `Wins $${oppPayout} (${opp.rank?.name})`
+              : tied
+                ? `Tie (${opp.rank?.name})`
+                : `Wins (${opp.rank?.name})`
+            : `Wins (${opp.rank?.name})`;
       } else {
         opp.reaction = 'defeated';
         opp.speech = opp.profile.loseLine;
@@ -1384,8 +1610,18 @@ export class PokerGameEngine {
       }
     }
 
-    if (playerInWinners && winningOpponents.length === 0) {
-      const explanation = `Showdown! You won the $${this.pot} pot with ${playerRank.name}! (${oppBreakdown}).`;
+    const allPaidWinners = seats.filter((s) => (settlement.payoutById.get(s.id) ?? 0) > 0);
+    const sidePotSummary = hasSidePots
+      ? allPaidWinners
+          .map((s) => `${s.name} won $${settlement.payoutById.get(s.id) ?? 0}`)
+          .join('; ')
+      : '';
+
+    if (playerOverallBest && tiedOpponentsOverall.length === 0) {
+      const wonAmt = this.pot > 0 ? playerPayout : 0;
+      const explanation = hasSidePots
+        ? `Showdown! You won $${wonAmt} (main pot) with ${playerRank.name}! Side pots: ${sidePotSummary}. (${oppBreakdown}).`
+        : `Showdown! You won the $${wonAmt} pot with ${playerRank.name}! (${oppBreakdown}).`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -1393,12 +1629,16 @@ export class PokerGameEngine {
         pot: this.pot,
         playerRank,
         opponentRank: bestOpp.rank,
-        winnerNames: ['You'],
-        message: `You won $${this.pot}! Your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name}${oppContenders.length > 1 ? ` (${oppBreakdown})` : ''}.`,
+        winnerNames: hasSidePots ? allPaidWinners.map((w) => w.name) : ['You'],
+        message: hasSidePots
+          ? `You won $${wonAmt} (main pot) with ${playerRank.name}! (${sidePotSummary}).`
+          : `You won $${wonAmt}! Your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name}${oppContenders.length > 1 ? ` (${oppBreakdown})` : ''}.`,
       };
-    } else if (playerInWinners && winningOpponents.length > 0) {
-      const tiedOppNames = this.formatNameList(winningOpponents.map((w) => w.name));
-      const explanation = `Showdown! Tie with ${tiedOppNames} — both held ${playerRank.name}. Pot of $${this.pot} is split!`;
+    } else if (playerOverallBest && tiedOpponentsOverall.length > 0) {
+      const tiedOppNames = this.formatNameList(tiedOpponentsOverall.map((w) => w.name));
+      const explanation = hasSidePots
+        ? `Showdown! Tie with ${tiedOppNames} (${playerRank.name}). Payouts: ${sidePotSummary}.`
+        : `Showdown! Tie with ${tiedOppNames} — both held ${playerRank.name}. Pot of $${this.pot} is split!`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -1406,23 +1646,32 @@ export class PokerGameEngine {
         pot: this.pot,
         playerRank,
         opponentRank: bestOpp.rank,
-        winnerNames: winners.map((w) => w.name),
-        message: `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
+        winnerNames: hasSidePots
+          ? allPaidWinners.map((w) => w.name)
+          : settlement.bestOverallWinners.map((w) => w.name),
+        message: hasSidePots
+          ? `Tie with ${tiedOppNames} (${playerRank.name}). ${sidePotSummary}.`
+          : `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
       };
     } else {
-      const winnerLabel = this.formatNameList(winningOpponents.map((w) => w.name));
-      const winningRankName = winningOpponents[0]!.rank.name;
-      const explanation = `Showdown! ${winnerLabel} won the $${this.pot} pot with ${winningRankName}, beating your ${playerRank.name}.`;
-      const lesson = `Lesson: your ${playerRank.name} lost to ${winnerLabel}'s ${winningRankName}.`;
+      const winnerSeats = allPaidWinners.length > 0 ? allPaidWinners : settlement.bestOverallWinners;
+      const winnerLabel = this.formatNameList(winnerSeats.map((w) => w.name));
+      const winningRankName = bestOpp.rank.name;
+      const explanation = hasSidePots
+        ? `Showdown! ${sidePotSummary}. Your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`
+        : `Showdown! ${winnerLabel} won the $${this.pot} pot with ${winningRankName}, beating your ${playerRank.name}.`;
+      const lesson = `Lesson: your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: `${explanation} (${oppBreakdown}).` });
       this.outcome = {
         result: 'loss',
         pot: this.pot,
         playerRank,
-        opponentRank: winningOpponents[0]!.rank,
-        winnerNames: winningOpponents.map((w) => w.name),
-        message: `${winnerLabel} won $${this.pot} with ${winningRankName} over your ${playerRank.name}.`,
+        opponentRank: bestOpp.rank,
+        winnerNames: winnerSeats.map((w) => w.name),
+        message: hasSidePots
+          ? `${sidePotSummary}. (${winningRankName} over your ${playerRank.name}).`
+          : `${winnerLabel} won $${this.pot} with ${winningRankName} over your ${playerRank.name}.`,
         lesson,
       };
     }
@@ -1434,6 +1683,7 @@ export class PokerGameEngine {
     if (this.stage === 'select_opponents') {
       return {
         type: 'select_opponents',
+        revision: this.stateRevision,
         message: 'Select 4 opponents from the VIP roster:',
         choices: [{ id: 'random_opponents', label: 'Random 4 Opponents', key: 'R', variant: 'primary' }],
       };
@@ -1442,6 +1692,7 @@ export class PokerGameEngine {
     if (this.stage === 'select_mode') {
       return {
         type: 'select_mode',
+        revision: this.stateRevision,
         message: 'Choose table difficulty:',
         choices: [
           { id: 'easy', label: 'Easy', key: '1' },
@@ -1463,6 +1714,7 @@ export class PokerGameEngine {
 
       return {
         type: 'player_action',
+        revision: this.stateRevision,
         message: `Your action (${STREETS[this.streetIndex]?.name}):`,
         choices,
       };
@@ -1474,6 +1726,7 @@ export class PokerGameEngine {
       const callLabel = legalCall < this.currentStreetWager ? `All-in $${legalCall}` : `Call $${legalCall}`;
       return {
         type: 'player_response',
+        revision: this.stateRevision,
         message: `${bettorLabel} bet $${this.currentStreetWager}. Your response:`,
         choices: [
           { id: 'call', label: callLabel, key: 'C', variant: 'primary' },
@@ -1486,6 +1739,7 @@ export class PokerGameEngine {
       const outcomeNote = this.outcome?.message ? `${this.outcome.message} ` : '';
       return {
         type: 'hand_over',
+        revision: this.stateRevision,
         message: `${outcomeNote}Play another hand?`,
         choices: [
           { id: 'yes', label: 'Play Again', key: 'Space', variant: 'primary' },
@@ -1497,6 +1751,7 @@ export class PokerGameEngine {
     if (this.stage === 'game_over') {
       return {
         type: 'game_over',
+        revision: this.stateRevision,
         message: 'Session complete.',
         choices: [{ id: 'restart', label: 'Start New Session', key: 'Space', variant: 'primary' }],
       };

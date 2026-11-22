@@ -976,6 +976,165 @@ test(
           { turnSpeed: 0.02, viewport: { width: 390, height: 844 } },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 8: Short Landscape Viewport (844 × 390) Fits Dealer, Table & Player Cards Without Clipping
+      // ----------------------------------------------------------------------
+      await t.test('short landscape viewport (844x390) fits dealer avatar, table, player cards, and controls without clipping', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('#btn-random-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await page.locator('#pots-window-close').click();
+
+            const bounds = await page.evaluate(() => {
+              const vw = window.innerWidth;
+              const vh = window.innerHeight;
+              const vp = document.querySelector('.pov-viewport')!.getBoundingClientRect();
+              const rectOf = (sel: string) => {
+                const el = document.querySelector(sel);
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+              };
+              const playerCards = Array.from(document.querySelectorAll('#player-cards-container .card')).map((c) => {
+                const r = c.getBoundingClientRect();
+                return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+              });
+              const actionBtns = Array.from(document.querySelectorAll('#action-buttons-group button')).map((b) => {
+                const r = b.getBoundingClientRect();
+                return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+              });
+              return {
+                vw,
+                vh,
+                vp: { top: vp.top, bottom: vp.bottom, left: vp.left, right: vp.right, height: vp.height },
+                dealerAvatar: rectOf('.dealer-slot .avatar'),
+                table: rectOf('.poker-table-surface'),
+                playerCards,
+                actionBtns,
+              };
+            });
+
+            assert.equal(bounds.vw, 844);
+            assert.equal(bounds.vh, 390);
+            assert.ok(
+              bounds.dealerAvatar && bounds.dealerAvatar.top >= bounds.vp.top - 2,
+              `Dealer avatar clipped at top on 844x390: dealer=${JSON.stringify(bounds.dealerAvatar)}, vp=${JSON.stringify(bounds.vp)}`,
+            );
+            assert.ok(
+              bounds.table && bounds.table.left >= 0 && bounds.table.right <= bounds.vw + 2,
+              `Table clipped horizontally on 844x390: ${JSON.stringify(bounds.table)}`,
+            );
+            assert.equal(bounds.playerCards.length, 2);
+            for (const card of bounds.playerCards) {
+              assert.ok(
+                card.top >= bounds.vp.top - 1 && card.bottom <= bounds.vp.bottom + 2,
+                `Player card clipped on 844x390: card=${JSON.stringify(card)}, vp=${JSON.stringify(bounds.vp)}`,
+              );
+            }
+            for (const btn of bounds.actionBtns) {
+              assert.ok(btn.bottom <= bounds.vh + 1 && btn.right <= bounds.vw + 1, `Action button clipped on 844x390: ${JSON.stringify(btn)}`);
+            }
+          },
+          { turnSpeed: 0.02, viewport: { width: 844, height: 390 } },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 9: Multi-Tab Stale Prompt Rejection (409 Conflict + Auto-Refresh)
+      // ----------------------------------------------------------------------
+      await t.test('two open tabs reject stale betting submission with 409 and refresh without applying a second wager', async () => {
+        const instance = await startServer(0);
+        const baseUrl = `http://127.0.0.1:${instance.port}`;
+        const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const pageA = await ctxA.newPage();
+        const pageB = await ctxB.newPage();
+        await pageA.addInitScript(() => {
+          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+        });
+        await pageB.addInitScript(() => {
+          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+        });
+
+        try {
+          await pageA.goto(baseUrl, { waitUntil: 'networkidle' });
+          await pageA.locator('#btn-random-opponents').click();
+          await pageA.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+          await pageA.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+          await waitForPromptReady(pageA, 'Your action (Pre-flop)');
+
+          // Open Tab B while Tab A is showing Pre-flop Bet $10 — both tabs now display the same prompt
+          await pageB.goto(baseUrl, { waitUntil: 'networkidle' });
+          await waitForPromptReady(pageB, 'Your action (Pre-flop)');
+
+          // Click Bet $10 in Tab A and wait for the Flop (or hand_over if all opponents folded)
+          await pageA.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          await pageA.waitForFunction(
+            () => {
+              const banner = document.getElementById('street-banner')?.textContent?.trim();
+              const title = document.getElementById('action-prompt-title')?.textContent || '';
+              return banner === 'FLOP' || title.includes('Play another hand?');
+            },
+            { timeout: 8000 },
+          );
+
+          const stateAfterTabA = await apiGetState(baseUrl);
+          const revAfterTabA = stateAfterTabA.stateRevision;
+          const contribAfterTabA = stateAfterTabA.playerHandContribution;
+
+          // Now click the still-visible stale Bet $10 button in Tab B!
+          const staleRespPromise = pageB.waitForResponse((r) => r.url().includes('/api/action'));
+          await pageB.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          const staleResp = await staleRespPromise;
+          assert.equal(staleResp.status(), 409, 'Stale tab submission must return HTTP 409 Conflict');
+
+          // Server state MUST NOT have changed (no $20 flop bet applied!)
+          const stateAfterTabB = await apiGetState(baseUrl);
+          assert.equal(stateAfterTabB.stateRevision, revAfterTabA);
+          assert.equal(stateAfterTabB.playerHandContribution, contribAfterTabA);
+          assert.equal(stateAfterTabB.streetIndex, stateAfterTabA.streetIndex);
+
+          // Tab B must have refreshed to match Tab A's latest street!
+          const bannerB = (await pageB.locator('#street-banner').textContent())?.trim();
+          assert.equal(bannerB, stateAfterTabA.streetName.toUpperCase());
+        } finally {
+          await ctxA.close();
+          await ctxB.close();
+          await instance.close();
+        }
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 10: Keyboard Shortcuts — 'R' Inside Picker Dialog & Native Space on Focused Cash Out
+      // ----------------------------------------------------------------------
+      await t.test('R shortcut triggers Random 4 inside open picker dialog and Space on focused Cash Out triggers Cash Out (not Play Again)', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.waitForSelector('dialog#opponent-modal-overlay[open]');
+            // Press 'r' while picker dialog is open -> triggers Random 4 Opponents and closes dialog!
+            await page.keyboard.press('r');
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await waitForPromptReady(page, 'Choose table difficulty');
+
+            // Start hand and fold so we reach Play Again / Cash Out prompt
+            await page.keyboard.press('1');
+            await waitForPromptReady(page, 'Your action (Pre-flop)');
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            // Focus Cash Out / Quit button and press Space -> MUST trigger Cash Out (Session complete.), NOT Play Again!
+            const cashOutBtn = page.locator('#action-buttons-group button[data-choice-id="no"]');
+            await cashOutBtn.focus();
+            await page.keyboard.press('Space');
+            await waitForPromptReady(page, 'Session complete');
+          },
+          { turnSpeed: 0.02 },
+        );
+      });
     } finally {
       await browser.close();
     }
