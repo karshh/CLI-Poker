@@ -12,7 +12,7 @@ async function main(): Promise<void> {
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
-║     ♠ ♥ ♦ ♣  TEXAS HOLD'EM POKER - VIDEO GAME  ♣ ♦ ♥ ♠       ║
+║      ♠ ♥ ♦ ♣  HIGH ROLLER HOLD'EM — VIP POKER GAME  ♣ ♦ ♥ ♠  ║
 ╚═══════════════════════════════════════════════════════════════╝
   🎰  Casino GUI Video Game is running!
   👉  URL: ${url}

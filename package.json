@@ -1,11 +1,11 @@
 {
-  "name": "cli-poker",
+  "name": "high-roller-holdem",
   "version": "1.0.0",
-  "description": "A strictly typed Node.js Texas Hold'em CLI game",
+  "description": "High Roller Hold'em — VIP Texas Hold'em casino video game and terminal CLI in strictly typed Node.js",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
-    "cli-poker": "dist/src/index.js"
+    "high-roller-holdem": "dist/src/index.js"
   },
   "files": [
     "dist",

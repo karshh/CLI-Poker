@@ -1,6 +1,6 @@
-# CLI Poker
+# High Roller Hold'em
 
-A heads-up Texas Hold’em game against a computer opponent, played in your terminal. Choose Easy, Medium, or Hard, make decisions street by street, and review a short lesson after a loss.
+A Texas Hold’em game with both a first-person POV VIP casino browser experience (`npm run gui`) and a classic heads-up terminal CLI mode (`npm start`). Choose Easy, Medium, or Hard, face a cast of illustrated VIP high-roller opponents or play street-by-street in your terminal, and review a short lesson after a CLI loss.
 
 ## Requirements
 
@@ -45,13 +45,13 @@ Running `npm run gui` launches a graphical first-person POV (point-of-view) Texa
 Build the image (the build stage installs pinned development tools and runs the tests):
 
 ```sh
-docker build --pull -t cli-poker .
+docker build --pull -t high-roller-holdem .
 ```
 
 Run the interactive game in a terminal:
 
 ```sh
-docker run --rm -it cli-poker
+docker run --rm -it high-roller-holdem
 ```
 
 The final image contains only the compiled app and Node.js runtime, runs as the unprivileged `node` user, and does not expose network ports.

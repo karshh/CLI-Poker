@@ -339,7 +339,7 @@ test('e2e (HTTP): startServer rejects cleanly when all 10 candidate ports are oc
 });
 
 test('e2e (HTTP): static asset handler rejects symlinked files pointing outside publicDir', async () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-poker-symlink-test-'));
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'high-roller-holdem-symlink-test-'));
   const fakePublic = path.join(tempRoot, 'public');
   const outsideSecret = path.join(tempRoot, 'secret.txt');
   fs.mkdirSync(fakePublic);

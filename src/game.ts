@@ -145,7 +145,7 @@ function finishShowdown(
 }
 
 export async function main(io: GameIO): Promise<void> {
-  io.print('Welcome to CLI Poker — heads-up Texas Hold’em.');
+  io.print('Welcome to High Roller Hold’em — heads-up Texas Hold’em.');
   const mode = await chooseMode(io);
   io.print(`\nPlaying on ${mode.toUpperCase()} mode.`);
 

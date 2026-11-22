@@ -998,7 +998,7 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   const htmlRes = await simulateRequest(handler, { method: 'GET', url: '/' });
   assert.equal(htmlRes.statusCode, 200);
   assert.equal(htmlRes.headers['content-security-policy'], "frame-ancestors 'none'");
-  assert.ok(htmlRes.body.includes("VIP Texas Hold'em"));
+  assert.ok(htmlRes.body.includes("High Roller Hold'em"));
   assert.ok(htmlRes.body.includes('Vincent'));
   assert.ok(htmlRes.body.includes('seat-far-left'));
   assert.ok(htmlRes.body.includes('opponent-modal-overlay'));

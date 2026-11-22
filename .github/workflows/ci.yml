@@ -20,13 +20,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build test stage Docker image
-        run: docker build --target build -t cli-poker:test .
+        run: docker build --target build -t high-roller-holdem:test .
 
       - name: Run tests in Docker container
-        run: docker run --rm cli-poker:test npm test
+        run: docker run --rm high-roller-holdem:test npm test
 
       - name: Build production Docker image
-        run: docker build -t cli-poker:latest .
+        run: docker build -t high-roller-holdem:latest .
 
   gui-browser-e2e:
     name: gui-browser-e2e
