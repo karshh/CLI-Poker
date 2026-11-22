@@ -1,0 +1,29 @@
+name: Pre-Merge CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build-and-test:
+    name: docker-build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build test stage Docker image
+        run: docker build --target build -t cli-poker:test .
+
+      - name: Run tests in Docker container
+        run: docker run --rm cli-poker:test npm test
+
+      - name: Build production Docker image
+        run: docker build -t cli-poker:latest .
