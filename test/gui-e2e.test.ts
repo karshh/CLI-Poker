@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { startServer, type PokerServerInstance } from '../src/gui/server.js';
@@ -27,10 +28,50 @@ async function apiGetState(baseUrl: string): Promise<SerializedGameState> {
 async function apiAct(baseUrl: string, action: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(`${baseUrl}/api/action`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl },
     body: JSON.stringify({ action }),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+function sendRawHttpRequest(options: {
+  port: number;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  chunks?: string[];
+}): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: options.port,
+        method: options.method,
+        path: options.path,
+        headers: options.headers,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            headers: res.headers,
+            body,
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (options.chunks) {
+      for (const chunk of options.chunks) {
+        req.write(chunk);
+      }
+    }
+    req.end();
+  });
 }
 
 // ============================================================================
@@ -50,21 +91,59 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
   const baseUrl = `http://127.0.0.1:${instance.port}`;
 
   try {
-    // 2. Verify static assets serve directly from built dist directory
-    for (const assetPath of ['/', '/game.js', '/style.css']) {
+    // 2. Verify only bundled static assets serve directly from built dist directory, with CSP frame-ancestors 'none'
+    for (const assetPath of ['/', '/index.html', '/game.js', '/style.css']) {
       const res = await fetch(`${baseUrl}${assetPath}`);
       assert.equal(res.status, 200, `Expected 200 for ${assetPath}`);
+      if (assetPath === '/' || assetPath === '/index.html') {
+        assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'none'");
+      }
     }
+    assert.equal((await fetch(`${baseUrl}/not-a-bundled-asset.txt`)).status, 404);
 
-    // 3. Same-origin enforcement: no wildcard CORS and cross-origin requests are blocked with 403
+    // 3. Security hardening: Host validation (DNS rebinding), exact Origin + JSON Content-Type, malformed URLs, & 413 body cap
     const stateRes = await fetch(`${baseUrl}/api/state`);
     assert.equal(stateRes.status, 200);
     assert.equal(stateRes.headers.get('access-control-allow-origin'), null);
 
+    // DNS rebinding / invalid Host blocked on BOTH HTML and API
+    const evilHostHtml = await sendRawHttpRequest({
+      port: instance.port,
+      method: 'GET',
+      path: '/',
+      headers: { Host: `attacker.example:${instance.port}` },
+    });
+    assert.equal(evilHostHtml.statusCode, 403);
+
+    const wrongPortHostApi = await sendRawHttpRequest({
+      port: instance.port,
+      method: 'GET',
+      path: '/api/state',
+      headers: { Host: '127.0.0.1:9999' },
+    });
+    assert.equal(wrongPortHostApi.statusCode, 403);
+
+    // Malformed request target returns 400 without crashing the server
+    const malformedTarget = await sendRawHttpRequest({
+      port: instance.port,
+      method: 'GET',
+      path: '//evil.example/path',
+      headers: { Host: `127.0.0.1:${instance.port}` },
+    });
+    assert.equal(malformedTarget.statusCode, 400);
+
+    // Cross-origin & missing-Origin & wrong-Content-Type enforcement
     const evilOriginGet = await fetch(`${baseUrl}/api/state`, {
       headers: { Origin: 'https://evil.example' },
     });
     assert.equal(evilOriginGet.status, 403);
+
+    const missingOriginPost = await fetch(`${baseUrl}/api/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'random_opponents' }),
+    });
+    assert.equal(missingOriginPost.status, 403);
 
     const evilOriginPost = await fetch(`${baseUrl}/api/action`, {
       method: 'POST',
@@ -73,12 +152,42 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
     });
     assert.equal(evilOriginPost.status, 403);
 
+    const wrongContentTypePost = await fetch(`${baseUrl}/api/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: baseUrl },
+      body: JSON.stringify({ action: 'random_opponents' }),
+    });
+    assert.equal(wrongContentTypePost.status, 415);
+
     const crossSiteSecFetch = await fetch(`${baseUrl}/api/state`, {
       headers: { 'Sec-Fetch-Site': 'cross-site' },
     });
     assert.equal(crossSiteSecFetch.status, 403);
 
-    // Same-origin loopback Origin header IS allowed
+    // Oversized POST body rejected with 413 (both with Content-Length and chunked with no Content-Length)
+    const oversizedPayload = JSON.stringify({ action: 'x'.repeat(2048) });
+    const oversizedWithLen = await fetch(`${baseUrl}/api/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+      body: oversizedPayload,
+    });
+    assert.equal(oversizedWithLen.status, 413);
+
+    const oversizedChunked = await sendRawHttpRequest({
+      port: instance.port,
+      method: 'POST',
+      path: '/api/action',
+      headers: {
+        Host: `127.0.0.1:${instance.port}`,
+        Origin: baseUrl,
+        'Content-Type': 'application/json',
+        'Transfer-Encoding': 'chunked',
+      },
+      chunks: ['{"action":"', 'a'.repeat(600), 'b'.repeat(600), '"}'],
+    });
+    assert.equal(oversizedChunked.statusCode, 413);
+
+    // Same-origin loopback Origin header IS allowed and server is still healthy after malformed/oversized requests
     const sameOriginGet = await fetch(`${baseUrl}/api/state`, {
       headers: { Origin: baseUrl },
     });
@@ -95,7 +204,7 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
 
     const missingBodyRes = await fetch(`${baseUrl}/api/action`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Origin: baseUrl },
       body: JSON.stringify({}),
     });
     assert.equal(missingBodyRes.status, 400);
@@ -213,6 +322,31 @@ test('e2e (HTTP): startServer rejects cleanly when all 10 candidate ports are oc
           }),
       ),
     );
+  }
+});
+
+test('e2e (HTTP): static asset handler rejects symlinked files pointing outside publicDir', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-poker-symlink-test-'));
+  const fakePublic = path.join(tempRoot, 'public');
+  const outsideSecret = path.join(tempRoot, 'secret.txt');
+  fs.mkdirSync(fakePublic);
+  fs.writeFileSync(outsideSecret, 'TOP_SECRET_DATA', 'utf8');
+  fs.symlinkSync(outsideSecret, path.join(fakePublic, 'index.html'));
+  fs.writeFileSync(path.join(fakePublic, 'style.css'), 'body{}', 'utf8');
+
+  const instance = await startServer(0, fakePublic);
+  const baseUrl = `http://127.0.0.1:${instance.port}`;
+  try {
+    const symlinkRes = await fetch(`${baseUrl}/`);
+    assert.equal(symlinkRes.status, 404, 'Symlinked asset must be rejected with 404');
+    const body = await symlinkRes.text();
+    assert.equal(body.includes('TOP_SECRET_DATA'), false);
+
+    const realFileRes = await fetch(`${baseUrl}/style.css`);
+    assert.equal(realFileRes.status, 200);
+  } finally {
+    await instance.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

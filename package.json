@@ -12,7 +12,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=26.10.0"
+    "node": ">=26.13.1"
   },
   "scripts": {
     "build": "node node_modules/typescript/lib/tsc.js -p tsconfig.json && node --input-type=module -e \"import { cpSync } from 'node:fs'; cpSync('src/gui/public', 'dist/src/gui/public', { recursive: true });\"",

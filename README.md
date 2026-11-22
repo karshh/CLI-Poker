@@ -4,7 +4,7 @@ A heads-up Texas Hold’em game against a computer opponent, played in your term
 
 ## Requirements
 
-- Node.js 26.10.0 or newer, as pinned in `.nvmrc`.
+- Node.js 26.13.1 or newer, as pinned in `.nvmrc`.
 - npm, included with Node.js.
 
 Install the pinned development tools and build the app:

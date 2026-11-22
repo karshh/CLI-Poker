@@ -36,7 +36,7 @@ class MockResponse extends Writable {
 
 function simulateRequest(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
-  options: { method: string; url: string; body?: string },
+  options: { method: string; url: string; body?: string; headers?: Record<string, string> },
 ): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
   return new Promise((resolve) => {
     const req = new Readable({
@@ -50,7 +50,12 @@ function simulateRequest(
 
     req.method = options.method;
     req.url = options.url;
-    req.headers = { host: 'localhost' };
+    const defaultHeaders: Record<string, string> = { host: '127.0.0.1:3000' };
+    if (options.method === 'POST') {
+      defaultHeaders['origin'] = 'http://127.0.0.1:3000';
+      defaultHeaders['content-type'] = 'application/json';
+    }
+    req.headers = { ...defaultHeaders, ...(options.headers ?? {}) };
 
     const res = new MockResponse();
     res.on('finish', () => {
@@ -391,14 +396,33 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.equal(actState.mode, 'easy');
   assert.equal(actState.stage, 'player_action');
 
-  // 3. GET / (index.html)
+  // 3. GET / (index.html) with frame-ancestors CSP
   const htmlRes = await simulateRequest(handler, { method: 'GET', url: '/' });
   assert.equal(htmlRes.statusCode, 200);
+  assert.equal(htmlRes.headers['content-security-policy'], "frame-ancestors 'none'");
   assert.ok(htmlRes.body.includes("VIP Texas Hold'em"));
   assert.ok(htmlRes.body.includes('Vincent'));
   assert.ok(htmlRes.body.includes('seat-far-left'));
   assert.ok(htmlRes.body.includes('opponent-modal-overlay'));
   assert.ok(htmlRes.body.includes('pots-window'));
+
+  // 4. Malformed URL & bad Host are handled safely without throwing
+  const badHostRes = await simulateRequest(handler, {
+    method: 'GET',
+    url: '/',
+    headers: { host: 'evil.example:3000' },
+  });
+  assert.equal(badHostRes.statusCode, 403);
+
+  const badUrlRes = await simulateRequest(handler, {
+    method: 'GET',
+    url: '//evil.example/steal',
+  });
+  assert.equal(badUrlRes.statusCode, 400);
+
+  // 5. Unknown static path returns 404 (strict bundled-asset allowlist)
+  const unknownAssetRes = await simulateRequest(handler, { method: 'GET', url: '/unknown.txt' });
+  assert.equal(unknownAssetRes.statusCode, 404);
 
   // 4. GET /style.css
   const cssRes = await simulateRequest(handler, { method: 'GET', url: '/style.css' });

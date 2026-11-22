@@ -4,64 +4,136 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PokerGameEngine } from './engine.js';
 
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon',
-};
-
 const LOOPBACK_HOST = '127.0.0.1';
+const MAX_ACTION_BODY_BYTES = 1024;
+const CONTROL_OR_SPACE_RE = /[\x00-\x20\x7f]/;
+const LOOPBACK_AUTHORITY_RE = /^127\.0\.0\.1:(\d{1,5})$/;
+
+interface BundledAsset {
+  file: string;
+  contentType: string;
+  isHtml: boolean;
+}
+
+const ALLOWED_STATIC_ASSETS: Readonly<Record<string, BundledAsset>> = {
+  '/': { file: 'index.html', contentType: 'text/html; charset=utf-8', isHtml: true },
+  '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8', isHtml: true },
+  '/game.js': { file: 'game.js', contentType: 'application/javascript; charset=utf-8', isHtml: false },
+  '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', isHtml: false },
+};
 
 export function findPublicDir(): string {
   const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
 
+  // Trusted, module-relative locations only (never derived from process.cwd())
   const candidates = [
     path.join(currentDir, 'public'),
-    path.join(process.cwd(), 'dist', 'src', 'gui', 'public'),
-    path.join(process.cwd(), 'src', 'gui', 'public'),
+    path.resolve(currentDir, '..', '..', '..', 'src', 'gui', 'public'),
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      return candidate;
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        return fs.realpathSync(candidate);
+      }
+    } catch {
+      // Try next trusted candidate
     }
   }
 
   return path.join(currentDir, 'public');
 }
 
-function isSameOriginRequest(req: http.IncomingMessage): boolean {
-  const fetchSite = req.headers['sec-fetch-site'];
-  if (typeof fetchSite === 'string' && fetchSite === 'cross-site') {
-    return false;
-  }
+export interface PokerRequestHandlerOptions {
+  /** Returns the actual bound TCP port once listening (enforces exact Host/Origin authority). */
+  getBoundPort?: () => number | null;
+}
 
-  const hostHeader = req.headers.host;
-  const originHeader = req.headers.origin;
-  if (typeof originHeader === 'string' && originHeader.length > 0) {
-    try {
-      const originUrl = new URL(originHeader);
-      if (originUrl.protocol !== 'http:') return false;
-      const isLoopbackOrigin =
-        originUrl.hostname === '127.0.0.1' || originUrl.hostname === 'localhost' || originUrl.hostname === '[::1]';
-      if (!isLoopbackOrigin) return false;
-      if (hostHeader) {
-        const expectedUrl = new URL(`http://${hostHeader}`);
-        if (originUrl.port !== expectedUrl.port) return false;
-      }
-      return true;
-    } catch {
-      return false;
+function validateHostAuthority(
+  hostHeader: string | undefined,
+  boundPort: number | null,
+): string | null {
+  if (typeof hostHeader !== 'string' || hostHeader.length === 0) {
+    return null;
+  }
+  const normalized = hostHeader.trim().toLowerCase();
+  if (boundPort !== null) {
+    const expected = `${LOOPBACK_HOST}:${boundPort}`;
+    return normalized === expected ? expected : null;
+  }
+  const match = LOOPBACK_AUTHORITY_RE.exec(normalized);
+  if (!match) return null;
+  const parsedPort = Number(match[1]);
+  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseOriginFormTarget(rawUrl: string | undefined): URL | null {
+  const target = rawUrl ?? '/';
+  if (
+    target.length === 0 ||
+    !target.startsWith('/') ||
+    target.startsWith('//') ||
+    CONTROL_OR_SPACE_RE.test(target)
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(target, `http://${LOOPBACK_HOST}`);
+    if (parsed.origin !== `http://${LOOPBACK_HOST}`) {
+      return null;
     }
+    return parsed;
+  } catch {
+    return null;
   }
+}
 
-  return true;
+function isFetchSiteAllowed(req: http.IncomingMessage, isStateChange: boolean): boolean {
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (typeof fetchSite !== 'string' || fetchSite.length === 0) {
+    return true;
+  }
+  const normalized = fetchSite.trim().toLowerCase();
+  if (isStateChange) {
+    return normalized === 'same-origin' || normalized === 'none';
+  }
+  return normalized !== 'cross-site';
+}
+
+function isJsonContentType(contentTypeHeader: string | undefined): boolean {
+  if (typeof contentTypeHeader !== 'string') return false;
+  const mediaType = contentTypeHeader.split(';')[0]?.trim().toLowerCase();
+  return mediaType === 'application/json';
+}
+
+function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown): void {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function resolveBundledAssetPath(publicDir: string, filename: string): string | null {
+  try {
+    const realPublicDir = fs.realpathSync(publicDir);
+    const candidatePath = path.join(realPublicDir, filename);
+    const lstat = fs.lstatSync(candidatePath);
+    if (lstat.isSymbolicLink() || !lstat.isFile()) {
+      return null;
+    }
+    const realTarget = fs.realpathSync(candidatePath);
+    if (!realTarget.startsWith(realPublicDir + path.sep)) {
+      return null;
+    }
+    return realTarget;
+  } catch {
+    return null;
+  }
 }
 
 export interface PokerServerInstance {
@@ -75,53 +147,118 @@ export interface PokerServerInstance {
 export function createPokerRequestHandler(
   engine: PokerGameEngine,
   publicDir: string = findPublicDir(),
+  options: PokerRequestHandlerOptions = {},
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
   return (req, res) => {
-    const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? `${LOOPBACK_HOST}:3000`}`);
-    const pathname = parsedUrl.pathname;
+    // 1. Validate Host header against configured loopback authority & actual bound port
+    //    before serving HTML, static assets, or API responses (blocks DNS rebinding).
+    const boundPort = options.getBoundPort ? options.getBoundPort() : null;
+    const authority = validateHostAuthority(req.headers.host, boundPort);
+    if (!authority) {
+      sendJson(res, 403, { error: 'Forbidden: invalid Host header.' });
+      return;
+    }
 
-    // Restrict API endpoints to same-origin loopback requests only (no wildcard CORS)
+    // 2. Parse origin-form request target against a fixed base without trusting Host.
+    const parsedUrl = parseOriginFormTarget(req.url);
+    if (!parsedUrl) {
+      sendJson(res, 400, { error: 'Malformed request URL.' });
+      return;
+    }
+
+    const pathname = parsedUrl.pathname;
+    const expectedOrigin = `http://${authority}`;
+
+    // 3. API endpoints (same-origin loopback only, no wildcard CORS)
     if (pathname.startsWith('/api/')) {
-      if (!isSameOriginRequest(req)) {
-        res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'Cross-origin requests are not permitted.' }));
+      const isStateChange = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE';
+
+      if (!isFetchSiteAllowed(req, isStateChange)) {
+        sendJson(res, 403, { error: 'Cross-site requests are not permitted.' });
         return;
       }
 
+      const originHeader = req.headers.origin;
+      if (isStateChange) {
+        // State-changing requests require the exact configured Origin and application/json
+        if (typeof originHeader !== 'string' || originHeader.trim().toLowerCase() !== expectedOrigin) {
+          sendJson(res, 403, { error: 'Cross-origin or missing Origin header on state change.' });
+          return;
+        }
+        if (!isJsonContentType(req.headers['content-type'])) {
+          sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+          return;
+        }
+      } else if (typeof originHeader === 'string' && originHeader.length > 0) {
+        // Missing Origin on state reads is normal; if supplied, it must match exactly
+        if (originHeader.trim().toLowerCase() !== expectedOrigin) {
+          sendJson(res, 403, { error: 'Cross-origin requests are not permitted.' });
+          return;
+        }
+      }
+
       if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
+        sendJson(res, 403, { error: 'CORS preflight is not permitted.' });
         return;
       }
 
       // API: GET /api/state
       if (req.method === 'GET' && pathname === '/api/state') {
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(engine.getState()));
+        sendJson(res, 200, engine.getState());
         return;
       }
 
-      // API: POST /api/action
+      // API: POST /api/action (with strict streaming byte cap before buffering/parsing)
       if (req.method === 'POST' && pathname === '/api/action') {
-        let body = '';
-        req.on('data', (chunk) => {
-          body += chunk;
+        const declaredLength = req.headers['content-length'];
+        if (typeof declaredLength === 'string') {
+          const parsedLen = Number(declaredLength);
+          if (Number.isFinite(parsedLen) && parsedLen > MAX_ACTION_BODY_BYTES) {
+            sendJson(res, 413, { error: `Request body exceeds ${MAX_ACTION_BODY_BYTES} byte limit.` });
+            req.resume();
+            return;
+          }
+        }
+
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let rejected = false;
+
+        req.on('error', () => {
+          rejected = true;
+          chunks.length = 0;
         });
+
+        req.on('data', (chunk: Buffer | string) => {
+          if (rejected) return;
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buf.length;
+          if (totalBytes > MAX_ACTION_BODY_BYTES) {
+            rejected = true;
+            chunks.length = 0;
+            if (!res.headersSent) {
+              sendJson(res, 413, { error: `Request body exceeds ${MAX_ACTION_BODY_BYTES} byte limit.` });
+            }
+            req.resume();
+            return;
+          }
+          chunks.push(buf);
+        });
+
         req.on('end', () => {
+          if (rejected || res.headersSent) return;
           try {
-            const data = JSON.parse(body || '{}') as { action?: unknown };
+            const rawBody = Buffer.concat(chunks, totalBytes).toString('utf8');
+            const data = JSON.parse(rawBody || '{}') as { action?: unknown };
             if (typeof data.action !== 'string') {
-              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(JSON.stringify({ error: 'Missing action string in body' }));
+              sendJson(res, 400, { error: 'Missing action string in body' });
               return;
             }
             const newState = engine.act(data.action);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify(newState));
+            sendJson(res, 200, newState);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ error: message }));
+            sendJson(res, 400, { error: message });
           }
         });
         return;
@@ -129,47 +266,47 @@ export function createPokerRequestHandler(
 
       // API: POST /api/reset
       if (req.method === 'POST' && pathname === '/api/reset') {
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(engine.getState()));
+        sendJson(res, 200, engine.getState());
         return;
       }
 
-      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'Unknown API endpoint' }));
+      sendJson(res, 404, { error: 'Unknown API endpoint' });
       return;
     }
 
-    // Static file serving
+    // 4. Static file serving — strictly allowlisted to the 3 bundled GUI assets,
+    //    rejecting symlinks and outside targets, with clickjacking CSP on HTML.
     if (req.method === 'GET') {
-      let filePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-      filePath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
-      const absolutePath = path.join(publicDir, filePath);
-      const resolvedPublic = path.resolve(publicDir);
-      const resolvedTarget = path.resolve(absolutePath);
-
-      if (
-        resolvedTarget.startsWith(resolvedPublic + path.sep) &&
-        fs.existsSync(resolvedTarget) &&
-        fs.statSync(resolvedTarget).isFile()
-      ) {
-        const ext = path.extname(resolvedTarget).toLowerCase();
-        const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': contentType });
-        const stream = fs.createReadStream(resolvedTarget);
-        stream.pipe(res);
-        return;
-      }
-
-      // Fallback to index.html for root/SPA paths
-      const indexPath = path.join(resolvedPublic, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        fs.createReadStream(indexPath).pipe(res);
-        return;
+      const asset = ALLOWED_STATIC_ASSETS[pathname];
+      if (asset) {
+        const safePath = resolveBundledAssetPath(publicDir, asset.file);
+        if (safePath) {
+          const headers: Record<string, string> = {
+            'Content-Type': asset.contentType,
+            'X-Content-Type-Options': 'nosniff',
+          };
+          if (asset.isHtml) {
+            headers['Content-Security-Policy'] = "frame-ancestors 'none'";
+            headers['X-Frame-Options'] = 'DENY';
+          }
+          res.writeHead(200, headers);
+          const stream = fs.createReadStream(safePath);
+          stream.on('error', () => {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+            }
+            res.end();
+          });
+          stream.pipe(res);
+          return;
+        }
       }
     }
 
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.writeHead(404, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    });
     res.end('Not Found');
   };
 }
@@ -177,8 +314,9 @@ export function createPokerRequestHandler(
 export function createPokerServer(
   engine: PokerGameEngine = new PokerGameEngine(),
   publicDir: string = findPublicDir(),
+  options: PokerRequestHandlerOptions = {},
 ): http.Server {
-  const handler = createPokerRequestHandler(engine, publicDir);
+  const handler = createPokerRequestHandler(engine, publicDir, options);
   return http.createServer(handler);
 }
 
@@ -187,11 +325,13 @@ export async function startServer(
   publicDir: string = findPublicDir(),
 ): Promise<PokerServerInstance> {
   const engine = new PokerGameEngine();
-  const server = createPokerServer(engine, publicDir);
+  let boundPort: number | null = null;
+  const server = createPokerServer(engine, publicDir, {
+    getBoundPort: () => boundPort,
+  });
 
   let candidatePort = preferredPort;
   const maxAttempts = preferredPort === 0 ? 1 : 10;
-  let boundPort: number | null = null;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {

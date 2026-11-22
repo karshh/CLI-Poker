@@ -1,4 +1,4 @@
-FROM node:26.10.0-trixie-slim AS build
+FROM node:26.13.1-trixie-slim AS build
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY src ./src
 COPY test ./test
 RUN npm test
 
-FROM node:26.10.0-trixie-slim AS runtime
+FROM node:26.13.1-trixie-slim AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
