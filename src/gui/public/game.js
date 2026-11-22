@@ -1398,7 +1398,35 @@
 
     await delay(350);
 
+    let lastRenderedStreet = currentState ? currentState.streetName : null;
+
     for (const event of events) {
+      if (event.streetName && lastRenderedStreet && event.streetName !== lastRenderedStreet) {
+        lastRenderedStreet = event.streetName;
+        // Clear old opponent speech bubbles for the new runout street
+        document.querySelectorAll('.opponent-bubble').forEach((b) => {
+          b.classList.remove('active', 'thinking');
+        });
+        elStreetBanner.textContent = event.streetName.toUpperCase();
+        elHudStreetStatus.textContent = `Street: ${event.streetName}`;
+        if (Array.isArray(event.boardSnapshot)) {
+          for (let i = 0; i < 5; i++) {
+            const slot = document.getElementById(`slot-${i}`);
+            const cardData = event.boardSnapshot[i];
+            if (slot && cardData) {
+              slot.innerHTML = renderCardHTML(cardData);
+            }
+          }
+          sfx.playCardFlip();
+        }
+        elDealerBubbleText.textContent = `${event.streetName} dealt! Opponents contest the side pot...`;
+        elDealerBubble.classList.add('active');
+        elSpeakerName.textContent = 'DEALER';
+        elSpeakerThumb.textContent = SPEAKER_ICONS.Dealer;
+        elDialogueMainText.textContent = `${event.streetName} dealt — remaining opponents play for the side pot.`;
+        await delay(450);
+      }
+
       setOpponentThinking(event);
       if (livePots.opponents[event.opponentId]) {
         livePots.opponents[event.opponentId].thinking = true;
@@ -1612,6 +1640,9 @@
       if (currentState && typeof currentState.stateRevision === 'number') {
         payload.stateRevision = currentState.stateRevision;
       }
+      if (currentState && typeof currentState.tableInstanceId === 'string') {
+        payload.tableInstanceId = currentState.tableInstanceId;
+      }
       const res = await fetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1623,7 +1654,7 @@
         isActionLocked = false;
         renderState(freshState, { skipActionSfx: true });
         if (elDialogueMainText) {
-          elDialogueMainText.textContent = 'Table updated in another tab — refreshed to latest state.';
+          elDialogueMainText.textContent = 'Table updated or restarted — refreshed to latest state.';
         }
         return;
       }

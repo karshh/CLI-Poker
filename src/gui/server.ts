@@ -249,7 +249,11 @@ export function createPokerRequestHandler(
           if (rejected || res.headersSent) return;
           try {
             const rawBody = Buffer.concat(chunks, totalBytes).toString('utf8');
-            const data = JSON.parse(rawBody || '{}') as { action?: unknown; stateRevision?: unknown };
+            const data = JSON.parse(rawBody || '{}') as {
+              action?: unknown;
+              stateRevision?: unknown;
+              tableInstanceId?: unknown;
+            };
             if (typeof data.action !== 'string') {
               sendJson(res, 400, { error: 'Missing action string in body' });
               return;
@@ -266,7 +270,15 @@ export function createPokerRequestHandler(
               }
               expectedRevision = data.stateRevision;
             }
-            const newState = engine.act(data.action, expectedRevision);
+            let expectedInstanceId: string | undefined;
+            if (data.tableInstanceId !== undefined) {
+              if (typeof data.tableInstanceId !== 'string' || data.tableInstanceId.trim().length === 0) {
+                sendJson(res, 400, { error: 'Invalid tableInstanceId in body' });
+                return;
+              }
+              expectedInstanceId = data.tableInstanceId;
+            }
+            const newState = engine.act(data.action, expectedRevision, expectedInstanceId);
             sendJson(res, 200, newState);
           } catch (err) {
             if (err instanceof StaleStateError) {

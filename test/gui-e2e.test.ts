@@ -1135,6 +1135,77 @@ test(
           { turnSpeed: 0.02 },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 11: Server Restart on Same Port Rejects Old Tab With Same Revision (409 + Refresh)
+      // ----------------------------------------------------------------------
+      await t.test('old browser tab gets 409 and refreshes when server restarts on same port at identical revision', async () => {
+        const instance1 = await startServer(0);
+        const port = instance1.port;
+        const baseUrl = `http://127.0.0.1:${port}`;
+        const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const oldTab = await ctx.newPage();
+        await oldTab.addInitScript(() => {
+          (window as unknown as { __TURN_SPEED__: number }).__TURN_SPEED__ = 0.02;
+        });
+
+        let instance2: PokerServerInstance | null = null;
+        try {
+          // Server #1: seat roster A (reginald, buck, elon, tony) and reach Pre-flop at stateRevision === 3
+          await oldTab.goto(baseUrl, { waitUntil: 'networkidle' });
+          for (const id of ['reginald', 'buck', 'elon', 'tony']) {
+            await oldTab.locator(`.opponent-pick-card[data-opp-id="${id}"]`).click();
+          }
+          await oldTab.locator('#btn-confirm-opponents').click();
+          await oldTab.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+          await waitForPromptReady(oldTab, 'Your action (Pre-flop)');
+          const state1 = await apiGetState(baseUrl);
+          assert.equal(state1.stateRevision, 3);
+
+          // Shut down Server #1 and restart Server #2 on the EXACT SAME PORT!
+          await instance1.close();
+          instance2 = await startServer(port);
+          assert.equal(instance2.port, port);
+
+          // Advance Server #2 to the EXACT SAME stateRevision === 3 with a DIFFERENT roster (bruce, viktor, meiling, tariq)
+          await apiAct(baseUrl, 'select_opponents:bruce,viktor,meiling,tariq');
+          await apiAct(baseUrl, 'easy');
+          const state2Before = await apiGetState(baseUrl);
+          assert.equal(state2Before.stateRevision, 3, 'Server #2 should be at identical numeric revision 3');
+          assert.notEqual(state2Before.tableInstanceId, state1.tableInstanceId);
+
+          // Clicking the still-visible Bet $10 button in the old tab MUST be rejected with 409 (instance mismatch!)
+          const staleRespPromise = oldTab.waitForResponse((r) => r.url().includes('/api/action'));
+          await oldTab.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+          const staleResp = await staleRespPromise;
+          assert.equal(staleResp.status(), 409, 'Old tab from previous server instance must receive HTTP 409');
+
+          // Server #2 hand must NOT have advanced (still Pre-flop, pot === 0, revision === 3)
+          const state2After = await apiGetState(baseUrl);
+          assert.equal(state2After.stateRevision, 3);
+          assert.equal(state2After.streetIndex, 0);
+          assert.equal(state2After.pot, 0);
+
+          // Old tab must have refreshed to Server #2's new roster!
+          const seatedIds = await oldTab.evaluate(() =>
+            Array.from(document.querySelectorAll('.character-container[data-opp-id]')).map((el) =>
+              el.getAttribute('data-opp-id'),
+            ),
+          );
+          assert.deepEqual(seatedIds, ['bruce', 'viktor', 'meiling', 'tariq']);
+        } finally {
+          await ctx.close();
+          if (instance2) {
+            await instance2.close();
+          } else {
+            try {
+              await instance1.close();
+            } catch {
+              // already closed
+            }
+          }
+        }
+      });
     } finally {
       await browser.close();
     }

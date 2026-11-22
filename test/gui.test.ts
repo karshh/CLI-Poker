@@ -310,6 +310,14 @@ test('PokerGameEngine enforces chip stack limits, runs out board when player is 
   assert.equal(state.board.length, 5);
   assert.equal(state.pot, 25 + 4 * (20 + 30 + 40)); // $385 total pot ($25 main + $360 side)
 
+  // turnEvents must include both the pre-flop calls AND the Flop/Turn/River side-pot runout decisions with board snapshots!
+  const eventStreets = [...new Set(state.turnEvents.map((e) => e.streetName))];
+  assert.deepEqual(eventStreets, ['Pre-flop', 'Flop', 'Turn', 'River']);
+  const flopEvents = state.turnEvents.filter((e) => e.streetName === 'Flop');
+  assert.equal(flopEvents.length, 4);
+  assert.equal(flopEvents[0]!.boardSnapshot.length, 3);
+  assert.equal(state.turnEvents[state.turnEvents.length - 1]!.potAfter, 385);
+
   // Player wins ONLY the $25 main pot (NOT $385!), while Reginald wins the $360 side pot!
   assert.equal(state.playerChips, 25);
   assert.equal(state.playerTotalPotWon, 25);
@@ -322,33 +330,82 @@ test('PokerGameEngine enforces chip stack limits, runs out board when player is 
   const totalChips = state.playerChips + state.opponents.reduce((sum, o) => sum + o.chips, 0);
   assert.equal(totalChips, 2005, 'Total chips across all seats must be conserved');
 
-  // Also test partial short-stack opponents + unmatched wager return:
-  // Player starts $50, Opps start $25. Pre-flop $10 (opps -> $15), Flop $20 (opps call all-in $15 -> $0, player $5 excess returned!).
-  const unmatchedEngine = new PokerGameEngine({
+  // When all 4 opponents go all-in on Flop ($25 stack each: $10 Pre-flop + $15 Flop against player's $20 Flop bet),
+  // the player is the ONLY funded seat left: $5 uncalled excess is refunded immediately and Turn/River run out to showdown
+  // WITHOUT offering an uncallable Turn Bet $30 or River Fold!
+  const opponentsAllInEngine = new PokerGameEngine({
     initialPlayerChips: 50,
     initialOpponentChips: 25,
     random: () => 0.5, // opponents always check/call
     deckFactory: makeDeterministicDeck,
   });
-  unmatchedEngine.act('select_opponents:reginald,buck,elon,tony');
-  let uState = unmatchedEngine.act('easy');
-  uState = unmatchedEngine.act('bet'); // Pre-flop $10
+  opponentsAllInEngine.act('select_opponents:reginald,buck,elon,tony');
+  let uState = opponentsAllInEngine.act('easy');
+  uState = opponentsAllInEngine.act('bet'); // Pre-flop $10 (opps -> $15)
   assert.equal(uState.streetName, 'Flop');
   assert.equal(uState.playerChips, 40);
   for (const opp of uState.opponents) assert.equal(opp.chips, 15);
 
-  uState = unmatchedEngine.act('bet'); // Flop $20 -> all opponents call all-in $15 (0 chips); player puts $20 ($5 unmatched!)
-  assert.equal(uState.streetName, 'Turn');
-  assert.equal(uState.playerChips, 20);
-  for (const opp of uState.opponents) assert.equal(opp.chips, 0);
-
-  // Turn ($30): player only has $20 left -> "All-in $20", goes all-in -> auto-runs out River to showdown!
-  assert.equal(uState.prompt?.choices.find((c) => c.id === 'bet')?.label, 'All-in $20');
-  uState = unmatchedEngine.act('bet');
-  assert.equal(uState.stage, 'hand_over');
+  uState = opponentsAllInEngine.act('bet'); // Flop $20 -> all 4 opponents call all-in $15 ($0 left), $5 uncalled returned, immediate runout to showdown!
+  assert.equal(uState.stage, 'hand_over', 'Must advance directly to showdown once no opponent can call further wagers');
   assert.equal(uState.board.length, 5);
+  assert.equal(uState.pot, 125); // 5 seats x $25 matched ($5 uncalled Flop excess returned to player!)
+  assert.equal(uState.playerChips, 150); // $50 start - $25 matched + $125 pot won = $150
   const uTotalChips = uState.playerChips + uState.opponents.reduce((sum, o) => sum + o.chips, 0);
-  assert.equal(uTotalChips, 150, 'Total chips with unmatched excess must be conserved');
+  assert.equal(uTotalChips, 150, 'Total chips with uncalled excess must be conserved');
+});
+
+test('PokerGameEngine excludes returned uncalled bets from uncontested winnings and counts $0-pot showdown wins', () => {
+  const makeDeterministicDeck = () => {
+    const cards = [
+      new Card('♠', 'A'), new Card('♥', 'A'), // Player: Pair of Aces (wins $0 check-down!)
+      new Card('♠', 'K'), new Card('♥', 'K'), // Seat 1
+      new Card('♠', 'J'), new Card('♦', '7'), // Seat 2
+      new Card('♦', '10'), new Card('♥', '8'), // Seat 3
+      new Card('♦', 'J'), new Card('♠', '3'), // Seat 4
+      new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'), // Flop
+      new Card('♣', 'Q'), // Turn
+      new Card('♥', '4'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  // 1. All 4 opponents fold to opening $10 bet (roll=0.05 -> facingBet=true folds on easy mode!)
+  const foldOutEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    random: () => 0.05,
+    deckFactory: makeDeterministicDeck,
+  });
+  foldOutEngine.act('select_opponents:reginald,buck,elon,tony');
+  foldOutEngine.act('easy');
+  const uncontested = foldOutEngine.act('bet');
+  assert.equal(uncontested.stage, 'hand_over');
+  assert.equal(uncontested.playerChips, 500, 'Uncalled $10 bet returned to player stack');
+  assert.equal(uncontested.playerTotalPotWon, 0, 'Returned uncalled bet must NOT inflate playerTotalPotWon');
+  assert.equal(uncontested.playerHandsWon, 1, 'Completed uncontested hand win must still increment playerHandsWon');
+  assert.equal(uncontested.outcome?.pot, 0);
+  assert.ok(uncontested.outcome?.message.includes('returned'));
+
+  // 2. Check down all four streets ($0 pot) with strongest hand -> playerHandsWon must increment!
+  const checkDownEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    random: () => 0.5, // opponents always check
+    deckFactory: makeDeterministicDeck,
+  });
+  checkDownEngine.act('select_opponents:reginald,buck,elon,tony');
+  checkDownEngine.act('easy');
+  checkDownEngine.act('check'); // Pre-flop -> Flop
+  checkDownEngine.act('check'); // Flop -> Turn
+  checkDownEngine.act('check'); // Turn -> River
+  const checkedDown = checkDownEngine.act('check'); // River -> Showdown ($0 pot)
+  assert.equal(checkedDown.stage, 'hand_over');
+  assert.equal(checkedDown.pot, 0);
+  assert.equal(checkedDown.outcome?.result, 'win');
+  assert.equal(checkedDown.playerHandsWon, 1, '$0 check-down showdown win must increment playerHandsWon');
+  assert.equal(checkedDown.playerTotalPotWon, 0);
+  assert.equal(checkedDown.playerChips, 500);
 });
 
 test('PokerGameEngine settles post-fold side pots by contribution and returns unmatched wagers', () => {
@@ -407,7 +464,7 @@ test('PokerGameEngine settles post-fold side pots by contribution and returns un
   engine.act('yes');
   const h2End = engine.act('fold');
   assert.equal(h2End.stage, 'hand_over');
-  assert.equal(h2End.pot, 75); // Buck $30 + Reg $15 + Elon $15 + Tony $15
+  assert.equal(h2End.pot, 60); // 4 x $15 matched ($15 uncalled Buck Flop excess returned immediately on street close)
   const regH2 = h2End.opponents.find((o) => o.id === 'reginald')!;
   const buckH2 = h2End.opponents.find((o) => o.id === 'buck')!;
   assert.equal(regH2.chips, 60, 'Reginald must win ONLY the $60 main pot (not Buck’s $15 unmatched excess)');

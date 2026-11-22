@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Deck, Card, type Suit, type CardValue } from '../card.js';
 import { compareHands, evaluateHand, type HandRank } from '../poker.js';
 import { decideAction, type Mode } from '../strategy.js';
@@ -39,16 +40,25 @@ export type GameStage =
 
 export class StaleStateError extends Error {
   public readonly code = 'STALE_STATE';
-  public readonly expectedRevision: number;
+  public readonly expectedRevision: number | undefined;
   public readonly currentRevision: number;
+  public readonly expectedInstanceId: string | undefined;
+  public readonly currentInstanceId: string;
 
-  constructor(expectedRevision: number, currentRevision: number) {
+  constructor(
+    expectedRevision: number | undefined,
+    currentRevision: number,
+    expectedInstanceId: string | undefined,
+    currentInstanceId: string,
+  ) {
     super(
-      `Stale action submission (client revision ${expectedRevision}, server revision ${currentRevision}). Refreshing table state.`,
+      `Stale action submission (client ${expectedInstanceId ?? 'unknown'}:${expectedRevision ?? '?'}, server ${currentInstanceId}:${currentRevision}). Refreshing table state.`,
     );
     this.name = 'StaleStateError';
     this.expectedRevision = expectedRevision;
     this.currentRevision = currentRevision;
+    this.expectedInstanceId = expectedInstanceId;
+    this.currentInstanceId = currentInstanceId;
   }
 }
 
@@ -62,6 +72,7 @@ export interface PromptChoice {
 export interface PromptInfo {
   type: GameStage;
   revision: number;
+  token: string;
   message: string;
   choices: PromptChoice[];
 }
@@ -118,6 +129,8 @@ export interface TurnEvent {
   opponentId: OpponentId;
   opponentName: string;
   shortName: OpponentShortName;
+  streetName: string;
+  boardSnapshot: CardData[];
   thinkingSpeech: string;
   action: 'check' | 'bet' | 'call' | 'fold';
   amount?: number;
@@ -131,7 +144,9 @@ export interface TurnEvent {
 }
 
 export interface SerializedGameState {
+  tableInstanceId: string;
   stateRevision: number;
+  stateToken: string;
   stage: GameStage;
   mode: Mode | null;
   streetIndex: number;
@@ -439,6 +454,7 @@ export class PokerGameEngine {
   private readonly defaultPlayerChips: number;
   private readonly defaultOpponentChips: number;
   private deck: Pick<Deck, 'draw'> = new Deck();
+  private readonly tableInstanceId: string = randomUUID();
   private stateRevision = 1;
   private mode: Mode | null = null;
   private stage: GameStage = 'select_opponents';
@@ -603,7 +619,9 @@ export class PokerGameEngine {
           : streetBet;
 
     return {
+      tableInstanceId: this.tableInstanceId,
       stateRevision: this.stateRevision,
+      stateToken: `${this.tableInstanceId}:${this.stateRevision}`,
       stage: this.stage,
       mode: this.mode,
       streetIndex: this.streetIndex,
@@ -650,6 +668,8 @@ export class PokerGameEngine {
       opponentId: opp.profile.id,
       opponentName: opp.profile.name,
       shortName: opp.profile.shortName,
+      streetName: STREETS[this.streetIndex]?.name ?? 'Showdown',
+      boardSnapshot: this.board.map(cardToData),
       thinkingSpeech: this.pickThinkingLine(opp),
       action,
       ...(amount !== undefined ? { amount } : {}),
@@ -663,9 +683,21 @@ export class PokerGameEngine {
     });
   }
 
-  public act(rawAction: string, expectedRevision?: number): SerializedGameState {
-    if (expectedRevision !== undefined && expectedRevision !== this.stateRevision) {
-      throw new StaleStateError(expectedRevision, this.stateRevision);
+  public act(
+    rawAction: string,
+    expectedRevision?: number,
+    expectedInstanceId?: string,
+  ): SerializedGameState {
+    if (
+      (expectedInstanceId !== undefined && expectedInstanceId !== this.tableInstanceId) ||
+      (expectedRevision !== undefined && expectedRevision !== this.stateRevision)
+    ) {
+      throw new StaleStateError(
+        expectedRevision,
+        this.stateRevision,
+        expectedInstanceId,
+        this.tableInstanceId,
+      );
     }
     const action = rawAction.trim().toLowerCase();
     this.turnEvents = [];
@@ -1146,11 +1178,67 @@ export class PokerGameEngine {
     }
   }
 
+  /**
+   * Immediately refunds any uncalled excess bet when a street closes so an uncallable wager
+   * can never remain in the pot or be awarded to an ineligible seat.
+   */
+  private refundUncalledExcess(): { seatId: string; seatName: string; amount: number } | null {
+    type SeatContrib = {
+      id: string;
+      name: string;
+      isPlayer: boolean;
+      contribution: number;
+      opp?: InternalOpponent;
+    };
+
+    const allSeats: SeatContrib[] = [
+      { id: 'player', name: 'You', isPlayer: true, contribution: this.playerHandContribution },
+      ...this.opponents.map((opp) => ({
+        id: opp.profile.id,
+        name: opp.profile.name,
+        isPlayer: false,
+        contribution: opp.handContribution,
+        opp,
+      })),
+    ];
+
+    allSeats.sort((a, b) => b.contribution - a.contribution);
+    const top = allSeats[0];
+    const second = allSeats[1];
+    if (!top || !second || top.contribution <= second.contribution) {
+      return null;
+    }
+
+    const excess = top.contribution - second.contribution;
+    this.pot = Math.max(0, this.pot - excess);
+    if (top.isPlayer) {
+      this.playerChips += excess;
+      this.playerHandContribution -= excess;
+    } else if (top.opp) {
+      top.opp.chips += excess;
+      top.opp.handContribution -= excess;
+    }
+
+    this.narrative.push({
+      speaker: 'Dealer',
+      text: `Uncalled bet of $${excess} returned to ${top.name}.`,
+    });
+    return { seatId: top.id, seatName: top.name, amount: excess };
+  }
+
   private advanceStreet(): void {
-    // If the player is already committed all-in (0 chips remaining), never prompt them to check/fold
-    // (which could forfeit pot eligibility). Run out remaining streets, letting opponents with chips
-    // contest side pots, then resolve showdown.
-    if (this.playerChips <= 0 && !this.playerFolded) {
+    // Settle any uncalled excess wager from the street that just closed before advancing
+    this.refundUncalledExcess();
+
+    const activeOppsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
+    const playerFunded = !this.playerFolded && this.playerChips > 0;
+    const fundedActiveSeats = activeOppsWithChips.length + (playerFunded ? 1 : 0);
+    const playerAllIn = !this.playerFolded && this.playerChips <= 0;
+
+    // Run out remaining streets without prompting the player whenever:
+    //  (a) the player is committed all-in (0 chips remaining), OR
+    //  (b) at most 1 active seat has chips remaining (no opponent can call any further wager).
+    if (playerAllIn || fundedActiveSeats <= 1) {
       while (this.streetIndex < STREETS.length - 1) {
         this.streetIndex += 1;
         this.currentStreetWager = 0;
@@ -1165,13 +1253,15 @@ export class PokerGameEngine {
             this.streetIndex === 1
               ? this.board.map((c) => c.toString()).join(', ')
               : (this.board[this.board.length - 1]?.toString() ?? '');
+          const runoutNote = playerAllIn ? 'You are all-in.' : 'No further betting possible.';
           this.narrative.push({
             speaker: 'Dealer',
-            text: `${street.name} dealt: [${cardsText}]. You are all-in.`,
+            text: `${street.name} dealt: [${cardsText}]. ${runoutNote}`,
           });
-          const opponentsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
-          if (opponentsWithChips.length >= 2) {
-            this.runOpponentsOnlyStreet(street.bet);
+          const oppsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
+          if (oppsWithChips.length >= 2) {
+            this.runOpponentsOnlyStreet(street.bet, true);
+            this.refundUncalledExcess();
           }
         }
       }
@@ -1230,9 +1320,9 @@ export class PokerGameEngine {
 
   /**
    * Plays out one betting street among the remaining active opponents (used when the player has folded
-   * in a multiway hand). Returns true if only 1 active opponent remains after the street.
+   * or is committed all-in during a multiway runout). Returns true if only 1 active opponent remains.
    */
-  private runOpponentsOnlyStreet(streetBet: number): boolean {
+  private runOpponentsOnlyStreet(streetBet: number, recordEvents = false): boolean {
     const active = this.getActiveOpponents();
     if (active.length <= 1 || !this.mode) return true;
 
@@ -1256,22 +1346,27 @@ export class PokerGameEngine {
           opp.reaction = 'confident';
           opp.speech = opp.profile.betLine(actualBet);
           this.narrative.push({ speaker: opp.profile.shortName, text: `Bets $${actualBet}.` });
+          if (recordEvents) this.recordTurnEvent(opp, 'bet', actualBet);
         } else {
           opp.lastAction = opp.chips === 0 ? 'All-in' : 'Checks';
           opp.reaction = 'neutral';
           opp.speech = opp.profile.checkLine;
           checkedBeforeBet.push(opp);
+          if (recordEvents) this.recordTurnEvent(opp, 'check');
         }
       } else {
         if (opp.chips <= 0) {
           this.checkOpponentAllIn(opp);
+          if (recordEvents) this.recordTurnEvent(opp, 'check');
           continue;
         }
         const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
         if (decision === 'fold') {
           this.foldOpponent(opp);
+          if (recordEvents) this.recordTurnEvent(opp, 'fold');
         } else {
-          this.callOpponent(opp, streetWager);
+          const paid = this.callOpponent(opp, streetWager);
+          if (recordEvents) this.recordTurnEvent(opp, 'call', paid);
         }
       }
     }
@@ -1281,13 +1376,16 @@ export class PokerGameEngine {
         if (!opp.cards) continue;
         if (opp.chips <= 0) {
           this.checkOpponentAllIn(opp);
+          if (recordEvents) this.recordTurnEvent(opp, 'check');
           continue;
         }
         const decision = decideAction(this.mode, opp.cards, this.board, true, this.random);
         if (decision === 'fold') {
           this.foldOpponent(opp);
+          if (recordEvents) this.recordTurnEvent(opp, 'fold');
         } else {
-          this.callOpponent(opp, streetWager);
+          const paid = this.callOpponent(opp, streetWager);
+          if (recordEvents) this.recordTurnEvent(opp, 'call', paid);
         }
       }
     }
@@ -1355,20 +1453,37 @@ export class PokerGameEngine {
       prevLevel = level;
     }
 
-    // Apply payouts and unmatched returns to actual seat stacks and session totals
+    // Apply payouts and unmatched returns to actual seat stacks and session totals.
+    // Distinguish showdown / hand wins from chip payouts so $0 check-down wins still count in handsWon!
+    const contestedSliceCount = slices.filter((s) => !s.unmatched).length;
+    const handWinnerIds = new Set<string>();
+    for (const [id, amt] of payoutById.entries()) {
+      if (amt > 0) handWinnerIds.add(id);
+    }
+    if (contestedSliceCount === 0) {
+      for (const w of bestOverallWinners) {
+        handWinnerIds.add(w.id);
+      }
+    }
+
     for (const seat of seats) {
       const payout = payoutById.get(seat.id) ?? 0;
       const unmatched = unmatchedById.get(seat.id) ?? 0;
+      const wonHand = handWinnerIds.has(seat.id);
       if (seat.isPlayer) {
         this.playerChips += payout + unmatched;
         if (payout > 0) {
           this.playerTotalPotWon += payout;
+        }
+        if (wonHand) {
           this.playerHandsWon += 1;
         }
       } else if (seat.opp) {
         seat.opp.chips += payout + unmatched;
         if (payout > 0) {
           seat.opp.totalPotWon += payout;
+        }
+        if (wonHand) {
           seat.opp.handsWon += 1;
         }
       }
@@ -1394,6 +1509,7 @@ export class PokerGameEngine {
       const currentStreet = STREETS[this.streetIndex];
       if (currentStreet) {
         this.runOpponentsOnlyStreet(currentStreet.bet);
+        this.refundUncalledExcess();
       }
     }
 
@@ -1427,6 +1543,7 @@ export class PokerGameEngine {
         const opponentsWithChips = this.getActiveOpponents().filter((o) => o.chips > 0);
         if (opponentsWithChips.length >= 2) {
           this.runOpponentsOnlyStreet(street.bet);
+          this.refundUncalledExcess();
         }
       }
     }
@@ -1496,20 +1613,41 @@ export class PokerGameEngine {
   }
 
   private handleAllOpponentsFold(): void {
-    this.playerChips += this.pot;
-    this.playerTotalPotWon += this.pot;
+    // Refund any uncalled excess first so returned bets are NEVER counted as pot winnings
+    const refunded = this.refundUncalledExcess();
+    const refundedAmt = refunded && refunded.seatId === 'player' ? refunded.amount : 0;
+    const awardedPot = this.pot;
+
+    this.playerChips += awardedPot;
+    if (awardedPot > 0) {
+      this.playerTotalPotWon += awardedPot;
+    }
     this.playerHandsWon += 1;
-    const explanation = `All opponents folded! You won the $${this.pot} pot uncontested!`;
+
+    const explanation =
+      awardedPot > 0
+        ? refundedAmt > 0
+          ? `All opponents folded! You won the $${awardedPot} pot uncontested (uncalled $${refundedAmt} bet returned).`
+          : `All opponents folded! You won the $${awardedPot} pot uncontested!`
+        : refundedAmt > 0
+          ? `All opponents folded! Your uncalled $${refundedAmt} bet was returned (won $0 from the pot).`
+          : 'All opponents folded! You won the hand uncontested.';
+
     this.dealerSpeech = explanation;
     this.narrative.push({ speaker: 'Dealer', text: explanation });
 
     this.outcome = {
       result: 'win',
-      pot: this.pot,
+      pot: awardedPot,
       playerRank: null,
       opponentRank: null,
       winnerNames: ['You'],
-      message: `All opponents folded! You won the $${this.pot} pot!`,
+      message:
+        awardedPot > 0
+          ? `All opponents folded! You won the $${awardedPot} pot!`
+          : refundedAmt > 0
+            ? `All opponents folded! Your uncalled $${refundedAmt} bet was returned.`
+            : 'All opponents folded! You won the hand.',
     };
 
     this.stage = 'hand_over';
@@ -1680,10 +1818,13 @@ export class PokerGameEngine {
   }
 
   private getPrompt(): PromptInfo | null {
+    const token = `${this.tableInstanceId}:${this.stateRevision}`;
+
     if (this.stage === 'select_opponents') {
       return {
         type: 'select_opponents',
         revision: this.stateRevision,
+        token,
         message: 'Select 4 opponents from the VIP roster:',
         choices: [{ id: 'random_opponents', label: 'Random 4 Opponents', key: 'R', variant: 'primary' }],
       };
@@ -1693,6 +1834,7 @@ export class PokerGameEngine {
       return {
         type: 'select_mode',
         revision: this.stateRevision,
+        token,
         message: 'Choose table difficulty:',
         choices: [
           { id: 'easy', label: 'Easy', key: '1' },
@@ -1715,6 +1857,7 @@ export class PokerGameEngine {
       return {
         type: 'player_action',
         revision: this.stateRevision,
+        token,
         message: `Your action (${STREETS[this.streetIndex]?.name}):`,
         choices,
       };
@@ -1727,6 +1870,7 @@ export class PokerGameEngine {
       return {
         type: 'player_response',
         revision: this.stateRevision,
+        token,
         message: `${bettorLabel} bet $${this.currentStreetWager}. Your response:`,
         choices: [
           { id: 'call', label: callLabel, key: 'C', variant: 'primary' },
@@ -1740,6 +1884,7 @@ export class PokerGameEngine {
       return {
         type: 'hand_over',
         revision: this.stateRevision,
+        token,
         message: `${outcomeNote}Play another hand?`,
         choices: [
           { id: 'yes', label: 'Play Again', key: 'Space', variant: 'primary' },
@@ -1752,6 +1897,7 @@ export class PokerGameEngine {
       return {
         type: 'game_over',
         revision: this.stateRevision,
+        token,
         message: 'Session complete.',
         choices: [{ id: 'restart', label: 'Start New Session', key: 'Space', variant: 'primary' }],
       };
