@@ -8,7 +8,7 @@ async function main(): Promise<void> {
   const envPort = process.env['PORT'];
   const preferredPort = envPort ? parseInt(envPort, 10) : 3000;
   const instance = await startServer(preferredPort);
-  const url = `http://localhost:${instance.port}/`;
+  const url = `http://${instance.host}:${instance.port}/`;
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗

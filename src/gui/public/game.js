@@ -730,10 +730,11 @@
   const sfx = new SoundFX();
   let currentState = null;
   let activeHotkeys = {};
-  let isAnimatingTurns = false;
+  let isActionLocked = false;
   let renderedRosterKey = '';
   let pickedOpponentIds = [];
   let pickerBuilt = false;
+  let pickerOpenedManually = false;
 
   const SPEAKER_ICONS = {
     Dealer: '🤵',
@@ -750,7 +751,8 @@
   };
 
   function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    const speed = typeof window.__POKER_TURN_SPEED__ === 'number' ? window.__POKER_TURN_SPEED__ : 1;
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.round(ms * speed))));
   }
 
   // DOM Elements
@@ -767,10 +769,11 @@
   const elPotsWindowTotal = document.getElementById('pots-window-total');
   const elPotsWindowBody = document.getElementById('pots-window-body');
 
-  // Opponent Selection Modal Elements
+  // Opponent Selection Modal Elements (Native <dialog>)
   const elOppModalOverlay = document.getElementById('opponent-modal-overlay');
   const elOppPickerGrid = document.getElementById('opponent-picker-grid');
   const elOppSelectCount = document.getElementById('opponent-select-count');
+  const elBtnCancelOpps = document.getElementById('btn-cancel-opponents');
   const elBtnRandomOpps = document.getElementById('btn-random-opponents');
   const elBtnConfirmOpps = document.getElementById('btn-confirm-opponents');
 
@@ -829,11 +832,63 @@
     elPotsWindowClose.addEventListener('click', () => togglePotsWindow(false));
   }
 
-  // Open Opponent Picker Button
+  function isHandActiveStage(stage) {
+    return stage === 'player_action' || stage === 'player_response';
+  }
+
+  function closeOpponentDialog() {
+    pickerOpenedManually = false;
+    if (elOppModalOverlay && elOppModalOverlay.open) {
+      elOppModalOverlay.close();
+    }
+    if (elOppModalOverlay) {
+      elOppModalOverlay.classList.remove('open');
+    }
+  }
+
+  function openOpponentDialog(allowCancel) {
+    if (!elOppModalOverlay) return;
+    if (elBtnCancelOpps) {
+      elBtnCancelOpps.hidden = !allowCancel;
+    }
+    elOppModalOverlay.classList.add('open');
+    if (!elOppModalOverlay.open) {
+      elOppModalOverlay.showModal();
+    }
+    const firstCard = elOppPickerGrid ? elOppPickerGrid.querySelector('.opponent-pick-card') : null;
+    if (firstCard && typeof firstCard.focus === 'function') {
+      firstCard.focus();
+    }
+  }
+
+  // Open Opponent Picker Button (only between hands; opens native dialog without mutating server stage)
   if (elPickOpponentsBtn) {
     elPickOpponentsBtn.addEventListener('click', () => {
-      if (isAnimatingTurns) return;
-      sendAction('open_opponent_select');
+      if (isActionLocked) return;
+      if (currentState && isHandActiveStage(currentState.stage)) return;
+      pickerOpenedManually = true;
+      if (currentState) {
+        renderOpponentPickerModal(currentState);
+      }
+    });
+  }
+
+  if (elOppModalOverlay) {
+    elOppModalOverlay.addEventListener('cancel', (e) => {
+      // Prevent closing with Escape when initial opponent selection is required
+      if (!pickerOpenedManually && (!currentState || currentState.stage === 'select_opponents')) {
+        e.preventDefault();
+        return;
+      }
+      pickerOpenedManually = false;
+      elOppModalOverlay.classList.remove('open');
+    });
+  }
+
+  if (elBtnCancelOpps) {
+    elBtnCancelOpps.addEventListener('click', () => {
+      closeOpponentDialog();
+      if (elPickOpponentsBtn) elPickOpponentsBtn.focus();
     });
   }
 
@@ -864,17 +919,19 @@
 
   function renderOpponentPickerModal(state) {
     if (!elOppModalOverlay || !elOppPickerGrid) return;
-    const isSelecting = state.stage === 'select_opponents';
-    elOppModalOverlay.classList.toggle('open', isSelecting);
+    const isMandatorySelection = state.stage === 'select_opponents';
+    const shouldShow = isMandatorySelection || (pickerOpenedManually && !isHandActiveStage(state.stage));
 
-    if (!isSelecting) return;
+    if (!shouldShow) {
+      closeOpponentDialog();
+      return;
+    }
 
     if (!pickerBuilt && Array.isArray(state.availableOpponents)) {
       pickerBuilt = true;
       elOppPickerGrid.innerHTML = '';
       state.availableOpponents.forEach((profile) => {
         const art = CHARACTER_ART[profile.id] || CHARACTER_ART.reginald;
-        // Clone SVG without conflicting gradient IDs by scoping portrait IDs
         const scopedPortrait = art.avatarSVG
           .replace(/id="([^"]+)"/g, 'id="pick_$1"')
           .replace(/url\(#([^)]+)\)/g, 'url(#pick_$1)');
@@ -900,7 +957,6 @@
           } else if (pickedOpponentIds.length < 4) {
             pickedOpponentIds.push(profile.id);
           } else {
-            // Replace oldest pick if user clicks a 5th character
             pickedOpponentIds.shift();
             pickedOpponentIds.push(profile.id);
           }
@@ -912,21 +968,24 @@
     }
 
     updateOpponentPickerUI();
+    openOpponentDialog(!isMandatorySelection);
   }
 
   if (elBtnRandomOpps) {
     elBtnRandomOpps.addEventListener('click', () => {
-      if (isAnimatingTurns) return;
+      if (isActionLocked) return;
       pickedOpponentIds = [];
+      pickerOpenedManually = false;
       sendAction('random_opponents');
     });
   }
 
   if (elBtnConfirmOpps) {
     elBtnConfirmOpps.addEventListener('click', () => {
-      if (isAnimatingTurns || pickedOpponentIds.length !== 4) return;
+      if (isActionLocked || pickedOpponentIds.length !== 4) return;
       const chosen = pickedOpponentIds.join(',');
       pickedOpponentIds = [];
+      pickerOpenedManually = false;
       sendAction(`select_opponents:${chosen}`);
     });
   }
@@ -1282,6 +1341,8 @@
       btn.disabled = true;
     });
     if (elPickOpponentsBtn) elPickOpponentsBtn.disabled = true;
+    if (elBtnRandomOpps) elBtnRandomOpps.disabled = true;
+    if (elBtnConfirmOpps) elBtnConfirmOpps.disabled = true;
   }
 
   async function playTurnSequenceAndRender(nextState, playerAction) {
@@ -1291,11 +1352,11 @@
 
     const events = nextState.turnEvents;
     if (!Array.isArray(events) || events.length === 0) {
+      isActionLocked = false;
       renderState(nextState);
       return;
     }
 
-    isAnimatingTurns = true;
     lockActionsDuringTurns('Opponents are making their decisions...');
 
     const prevBetAmt = currentState ? currentState.currentBet : 0;
@@ -1360,8 +1421,7 @@
       await delay(650);
     }
 
-    isAnimatingTurns = false;
-    if (elPickOpponentsBtn) elPickOpponentsBtn.disabled = false;
+    isActionLocked = false;
     renderState(nextState, { skipActionSfx: true });
   }
 
@@ -1370,7 +1430,14 @@
     const prevState = currentState;
     currentState = state;
 
-    if (elPickOpponentsBtn) elPickOpponentsBtn.disabled = false;
+    if (elPickOpponentsBtn) {
+      const handInProgress = isHandActiveStage(state.stage);
+      elPickOpponentsBtn.disabled = handInProgress;
+      elPickOpponentsBtn.title = handInProgress
+        ? 'Finish or fold the current hand to change opponents'
+        : 'Choose 4 opponents from the 8 VIP characters';
+    }
+    if (elBtnRandomOpps) elBtnRandomOpps.disabled = false;
 
     // Opponent Selection Modal (shown when stage === 'select_opponents')
     renderOpponentPickerModal(state);
@@ -1511,6 +1578,7 @@
     prompt.choices.forEach((choice) => {
       const btn = document.createElement('button');
       btn.className = `game-btn btn-${choice.variant || 'default'}`;
+      btn.dataset.choiceId = choice.id;
       btn.innerHTML = `
         <span>${choice.label}</span>
         <span class="hotkey-pill">${choice.key}</span>
@@ -1529,10 +1597,13 @@
     });
   }
 
-  // Send Player Action to Server
+  // Send Player Action to Server (locked synchronously BEFORE fetch starts!)
   async function sendAction(action) {
-    if (isAnimatingTurns) return;
+    if (isActionLocked) return;
+    isActionLocked = true;
+    lockActionsDuringTurns('Submitting action...');
     ensureAudio();
+
     try {
       const res = await fetch('/api/action', {
         method: 'POST',
@@ -1540,30 +1611,36 @@
         body: JSON.stringify({ action }),
       });
       const data = await res.json();
-      if (data.error) {
-        console.error('Action error:', data.error);
+      if (!res.ok || data.error) {
+        console.error('Action error:', data.error || res.status);
+        if (currentState) renderState(currentState, { skipActionSfx: true });
         return;
       }
       await playTurnSequenceAndRender(data, action);
     } catch (err) {
-      isAnimatingTurns = false;
       console.error('Failed to send action:', err);
+      if (currentState) renderState(currentState, { skipActionSfx: true });
+    } finally {
+      isActionLocked = false;
     }
   }
 
   // Global Keyboard Navigation
   window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
+    // Do not intercept global shortcuts when native opponent dialog is open (except M mute)
+    const dialogOpen = Boolean(elOppModalOverlay && elOppModalOverlay.open);
     if (key === 'm') {
       const active = sfx.toggle();
       elSoundIcon.textContent = active ? '🔊' : '🔇';
       return;
     }
+    if (dialogOpen) return;
     if (key === 'p') {
       togglePotsWindow();
       return;
     }
-    if (isAnimatingTurns) return;
+    if (isActionLocked) return;
     if (activeHotkeys[key]) {
       e.preventDefault();
       sendAction(activeHotkeys[key]);

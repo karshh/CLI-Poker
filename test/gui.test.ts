@@ -253,6 +253,113 @@ test('PokerGameEngine emits sequential turnEvents with thinking and decision spe
   }
 });
 
+test('PokerGameEngine enforces chip stack limits on short-stack player and opponents (no negative stacks)', () => {
+  // Deterministic RNG that makes opponents always check/call (never fold) on easy mode (roll = 0.5 >= 0.45 and >= 0.25)
+  const engine = new PokerGameEngine({
+    initialPlayerChips: 50,
+    initialOpponentChips: 25,
+    random: () => 0.5,
+  });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  let state = engine.act('easy');
+
+  // Pre-flop ($10): player bets $10 (stack 50 -> 40), all 4 opponents call $10 (stacks 25 -> 15)
+  state = engine.act('bet');
+  assert.equal(state.streetName, 'Flop');
+  assert.equal(state.playerChips, 40);
+  for (const opp of state.opponents) {
+    assert.equal(opp.chips, 15);
+  }
+
+  // Flop ($20): player bets $20 (stack 40 -> 20), opponents only have $15 so each goes all-in for $15 (stack -> 0, never negative!)
+  state = engine.act('bet');
+  assert.equal(state.streetName, 'Turn');
+  assert.equal(state.playerChips, 20);
+  for (const opp of state.opponents) {
+    assert.equal(opp.chips, 0);
+    assert.ok(opp.chips >= 0);
+  }
+
+  // Turn ($30): player only has $20 left -> prompt must offer "All-in $20" (not "Bet $30"!)
+  const betChoice = state.prompt?.choices.find((c) => c.id === 'bet');
+  assert.equal(betChoice?.label, 'All-in $20');
+  assert.equal(state.currentBet, 20);
+  const potBeforeTurnBet = state.pot;
+
+  state = engine.act('bet');
+  assert.equal(state.streetName, 'River');
+  assert.equal(state.playerChips, 0);
+  assert.equal(state.pot, potBeforeTurnBet + 20);
+
+  // River ($40): player has $0 chips -> Bet option must NOT be offered and betting must throw
+  assert.equal(state.prompt?.choices.some((c) => c.id === 'bet'), false);
+  assert.throws(() => engine.act('bet'), /Insufficient chips/);
+  for (const opp of state.opponents) {
+    assert.ok(opp.chips >= 0);
+  }
+});
+
+test('PokerGameEngine keeps multiway hands going after player fold and ends immediately if 1 contender remains', () => {
+  // Deterministic RNG: roll = 0.05 -> on easy mode facingBet=false (< 0.45 => bet), facingBet=true (< 0.25 => fold)!
+  // So after player folds on pre-flop, seat 1 bets $10 and seats 2, 3, 4 all fold -> hand ends immediately on Pre-flop!
+  const uncontestedEngine = new PokerGameEngine({ random: () => 0.05 });
+  uncontestedEngine.act('select_opponents:reginald,buck,elon,tony');
+  uncontestedEngine.act('easy');
+  const foldedEarly = uncontestedEngine.act('fold');
+  assert.equal(foldedEarly.stage, 'hand_over');
+  assert.equal(foldedEarly.playerFolded, true);
+  assert.equal(foldedEarly.outcome?.result, 'fold');
+  // Ended immediately when only 1 opponent remained (no unnecessary Flop/Turn/River cards dealt!)
+  assert.equal(foldedEarly.board.length, 0);
+  assert.equal(foldedEarly.opponents.filter((o) => !o.folded).length, 1);
+  assert.ok(foldedEarly.dealerSpeech.includes('last player standing'));
+
+  // Deterministic RNG: roll = 0.35 -> on easy mode facingBet=false (< 0.45 => bet), facingBet=true (>= 0.25 => call)!
+  // So all 4 opponents bet & call across Pre-flop ($10), Flop ($20), Turn ($30), and River ($40) = $400 total pot!
+  const multiwayEngine = new PokerGameEngine({ random: () => 0.35 });
+  multiwayEngine.act('select_opponents:reginald,buck,elon,tony');
+  multiwayEngine.act('easy');
+  const foldedMultiway = multiwayEngine.act('fold');
+  assert.equal(foldedMultiway.stage, 'hand_over');
+  assert.equal(foldedMultiway.board.length, 5);
+  assert.equal(foldedMultiway.pot, 400);
+  for (const opp of foldedMultiway.opponents) {
+    assert.equal(opp.cardsHidden, true);
+    assert.equal(opp.cards[0]?.str, '??');
+  }
+});
+
+test('PokerGameEngine restricts roster changes during active hand and clears all state on restart', () => {
+  const engine = new PokerGameEngine({ random: () => 0.5 });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  engine.act('easy');
+  engine.act('bet'); // active hand on Flop with $50 in pot
+
+  // Attempting to open or change opponents mid-hand must throw and preserve pot/chips
+  const beforePot = engine.getState().pot;
+  assert.throws(() => engine.act('open_opponent_select'), /active hand/);
+  assert.throws(() => engine.act('select_opponents:bruce,viktor,meiling,tariq'), /active hand/);
+  assert.equal(engine.getState().pot, beforePot);
+
+  // Finish hand, cash out, restart -> ALL table state, pots, opponent totals, and narrative must reset cleanly
+  engine.act('fold');
+  engine.act('no');
+  const restarted = engine.act('restart');
+  assert.equal(restarted.stage, 'select_opponents');
+  assert.equal(restarted.pot, 0);
+  assert.equal(restarted.board.length, 0);
+  assert.equal(restarted.playerChips, 500);
+  assert.equal(restarted.playerTotalPotWon, 0);
+  assert.equal(restarted.handCount, 0);
+  assert.equal(restarted.narrative.length, 1);
+  for (const opp of restarted.opponents) {
+    assert.equal(opp.chips, 500);
+    assert.equal(opp.totalPotWon, 0);
+    assert.equal(opp.handContribution, 0);
+    assert.equal(opp.cards.length, 0);
+  }
+});
+
 test('HTTP request handler serves state, static files, and handles actions', async () => {
   const engine = new PokerGameEngine();
   const handler = createPokerRequestHandler(engine);

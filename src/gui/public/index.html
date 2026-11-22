@@ -77,8 +77,8 @@
         </div>
       </aside>
 
-      <!-- OPPONENT SELECTION MODAL (Shown before starting a new game) -->
-      <div class="opponent-modal-overlay" id="opponent-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="opponent-modal-title">
+      <!-- OPPONENT SELECTION NATIVE DIALOG (Focus-trapped & inert background via showModal) -->
+      <dialog class="opponent-modal-overlay" id="opponent-modal-overlay" aria-labelledby="opponent-modal-title">
         <div class="opponent-modal">
           <div class="opponent-modal-header">
             <div>
@@ -88,16 +88,17 @@
             <div class="opponent-modal-counter" id="opponent-select-count">0 / 4 Selected</div>
           </div>
           <div class="opponent-picker-grid" id="opponent-picker-grid">
-            <!-- 7 illustrated VIP character cards injected here -->
+            <!-- 8 illustrated VIP character cards injected here -->
           </div>
           <div class="opponent-modal-footer">
+            <button type="button" class="game-btn btn-danger" id="btn-cancel-opponents" hidden>Cancel</button>
             <button type="button" class="game-btn btn-default" id="btn-random-opponents">🎲 Random 4</button>
             <button type="button" class="game-btn btn-primary" id="btn-confirm-opponents" disabled>
               Sit Down &amp; Play →
             </button>
           </div>
         </div>
-      </div>
+      </dialog>
 
       <div class="pov-perspective-container">
 

@@ -379,32 +379,36 @@ html, body {
 .pots-val.stack { color: #34d399; }
 
 /* ==========================================================================
-   OPPONENT SELECTION MODAL (BEFORE STARTING A NEW GAME)
+   OPPONENT SELECTION NATIVE <DIALOG> (Focus-trapped via showModal)
    ========================================================================== */
 
 .opponent-modal-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(6, 4, 10, 0.82);
-  backdrop-filter: blur(8px);
-  z-index: 60;
+  margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  width: min(920px, calc(100vw - 24px));
+  max-width: min(920px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: visible;
+  color: inherit;
+}
+.opponent-modal-overlay:not([open]) {
+  display: none;
+}
+.opponent-modal-overlay[open] {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
 }
-.opponent-modal-overlay.open {
-  opacity: 1;
-  pointer-events: auto;
+.opponent-modal-overlay::backdrop {
+  background: rgba(6, 4, 10, 0.84);
+  backdrop-filter: blur(8px);
 }
 
 .opponent-modal {
   width: 100%;
-  max-width: 920px;
-  max-height: 100%;
+  max-height: calc(100vh - 32px);
   background: linear-gradient(165deg, #161d2e 0%, #0b0f19 100%);
   border: 2px solid var(--gold-primary);
   border-radius: 14px;
@@ -1679,7 +1683,7 @@ html, body {
 .log-speaker.System { color: #f472b6; }
 .log-text { color: #e5e7eb; }
 
-/* Responsive adjustments */
+/* Responsive adjustments (tablet & phone viewports down to 360px width) */
 @media (max-height: 780px) {
   .table-scene { transform: scale(0.86); margin-top: 64px; }
 }
@@ -1690,6 +1694,96 @@ html, body {
   .table-scene { transform: scale(0.82); }
 }
 @media (max-width: 860px) {
-  .table-scene { transform: scale(0.68); }
+  .table-scene { transform: scale(0.64); }
   .hud-inner { padding: 8px 12px; }
+}
+@media (max-width: 660px) {
+  .top-nav {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .stats-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+  }
+  .nav-pill-btn,
+  .stat-pill {
+    font-size: 11px;
+    padding: 3px 9px;
+  }
+  .table-scene {
+    transform: scale(0.46);
+    margin-top: 24px;
+  }
+  .player-pov-area {
+    padding: 0 12px;
+  }
+  .player-cards-container .card {
+    width: 64px;
+    height: 92px;
+  }
+  .pots-window {
+    left: 10px;
+    top: 8px;
+    width: min(260px, calc(100vw - 20px));
+  }
+  .dialogue-panel {
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .speaker-identity {
+    width: 100%;
+    min-width: 0;
+  }
+  .dialogue-text {
+    font-size: 12px;
+  }
+  .actions-panel {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .action-prompt-title {
+    font-size: 12px;
+    text-align: center;
+  }
+  .action-buttons-group {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+  }
+  .game-btn {
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+  .history-drawer {
+    right: 8px;
+    width: calc(100vw - 16px);
+  }
+}
+@media (max-width: 480px) {
+  .table-scene {
+    transform: scale(0.33);
+    margin-top: 10px;
+  }
+  .brand {
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+  .opponent-modal-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .opponent-modal-footer {
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 10px 12px;
+  }
 }
