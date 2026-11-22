@@ -174,7 +174,7 @@ test('e2e: immediate fold on pre-flop exits cleanly after one hand', async () =>
   const { exitCode, stdout, stderr } = await runScriptedSession(['easy', 'fold', 'no']);
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
-  assert.match(stdout, /Welcome to CLI Poker — heads-up Texas Hold’em\./);
+  assert.match(stdout, /Welcome to High Roller Hold’em — heads-up Texas Hold’em\./);
   assert.match(stdout, /Playing on EASY mode\./);
   assert.match(stdout, /Your cards: \S+\s+\S+/);
   assert.match(stdout, /Opponent difficulty: easy/);
@@ -246,7 +246,7 @@ test('e2e: all four streets and bet sizes ($10, $20, $30, $40) are experienced t
   });
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
-  assert.match(stdout, /Welcome to CLI Poker/);
+  assert.match(stdout, /Welcome to High Roller Hold’em/);
   assert.match(stdout, /Playing on HARD mode\./);
   assert.match(stdout, /Pre-flop\nYour action \(check, bet \$10, fold\): /);
   assert.match(stdout, /Flop — board: (?:\S+\s+){2}\S+\nYour action \(check, bet \$20, fold\): /);
@@ -345,6 +345,6 @@ test('e2e: closing stdin early exits cleanly without unhandled error', async () 
   });
 
   assert.equal(exitCode, 0, `Process failed with stderr: ${stderr}`);
-  assert.match(stdout, /Welcome to CLI Poker — heads-up Texas Hold’em\./);
+  assert.match(stdout, /Welcome to High Roller Hold’em — heads-up Texas Hold’em\./);
   assert.equal(stderr, '');
 });

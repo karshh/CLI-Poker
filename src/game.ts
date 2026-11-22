@@ -2,7 +2,7 @@ import { Deck, type Card } from './card.js';
 import { compareHands, evaluateHand, type HandRank } from './poker.js';
 import { decideAction, MODES, type Mode } from './strategy.js';
 
-const STREETS = [
+export const STREETS = [
   { name: 'Pre-flop', bet: 10 },
   { name: 'Flop', bet: 20 },
   { name: 'Turn', bet: 30 },
@@ -145,7 +145,7 @@ function finishShowdown(
 }
 
 export async function main(io: GameIO): Promise<void> {
-  io.print('Welcome to CLI Poker — heads-up Texas Hold’em.');
+  io.print('Welcome to High Roller Hold’em — heads-up Texas Hold’em.');
   const mode = await chooseMode(io);
   io.print(`\nPlaying on ${mode.toUpperCase()} mode.`);
 
