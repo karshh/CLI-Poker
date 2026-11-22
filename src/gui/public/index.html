@@ -17,7 +17,7 @@
         <span class="suit-icon black">♠</span>
       </div>
       <div class="stats-bar">
-        <button id="pots-toggle-btn" class="nav-pill-btn active" title="Show/Hide Opponent Pots Window (P)">
+        <button type="button" id="pots-toggle-btn" class="nav-pill-btn active" aria-controls="pots-window" aria-expanded="true" title="Show/Hide Opponent Pots Window (P)">
           💰 Table Pots
         </button>
         <button id="pick-opponents-btn" class="nav-pill-btn" title="Choose 4 opponents from the 8 VIP characters">
@@ -60,11 +60,11 @@
         </div>
       </div>
       <!-- HIDABLE OPPONENT POTS & STACKS FLOATING WINDOW -->
-      <aside class="pots-window open" id="pots-window" aria-label="Opponent Pots Tracker">
+      <aside class="pots-window open" id="pots-window" aria-label="Opponent Pots Tracker" aria-hidden="false">
         <div class="pots-window-header">
           <span class="pots-window-title">💰 TABLE POTS</span>
           <span class="pots-window-total" id="pots-window-total">Pot: $0</span>
-          <button class="pots-window-close" id="pots-window-close" title="Hide window (P)">&times;</button>
+          <button type="button" class="pots-window-close" id="pots-window-close" aria-label="Close Table Pots" title="Hide window (P)">&times;</button>
         </div>
         <div class="pots-window-cols">
           <span>Player</span>
@@ -289,7 +289,7 @@
               <span class="speaker-badge" id="speaker-name">DEALER VINCENT</span>
               <span class="street-status" id="hud-street-status">Street: Pre-flop</span>
             </div>
-            <button class="log-toggle-btn" id="log-toggle-btn" title="View Full Log">📜 Log</button>
+            <button type="button" class="log-toggle-btn" id="log-toggle-btn" aria-controls="history-drawer" aria-expanded="false" title="View Full Log">📜 Log</button>
           </div>
 
           <!-- Main Dialogue Text Display -->
@@ -310,10 +310,10 @@
       </div>
 
       <!-- Expandable Log History Modal / Drawer -->
-      <div class="history-drawer" id="history-drawer">
+      <div class="history-drawer" id="history-drawer" role="region" aria-label="Game History and Lessons" aria-hidden="true" inert>
         <div class="drawer-header">
           <span>Game History & Lessons</span>
-          <button class="drawer-close" id="drawer-close">&times;</button>
+          <button type="button" class="drawer-close" id="drawer-close" aria-label="Close Game History">&times;</button>
         </div>
         <div class="drawer-content" id="drawer-content"></div>
       </div>

@@ -1125,6 +1125,12 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.ok(htmlRes.body.includes('seat-far-left'));
   assert.ok(htmlRes.body.includes('opponent-modal-overlay'));
   assert.ok(htmlRes.body.includes('pots-window'));
+  // Collapsible panels have proper initial ARIA & inert attributes (#history-drawer starts closed)
+  assert.match(htmlRes.body, /id="pots-toggle-btn"[^>]*aria-controls="pots-window"[^>]*aria-expanded="true"/);
+  assert.match(htmlRes.body, /id="pots-window"[^>]*aria-hidden="false"/);
+  assert.doesNotMatch(htmlRes.body, /<aside[^>]*id="pots-window"[^>]*\binert\b/);
+  assert.match(htmlRes.body, /id="log-toggle-btn"[^>]*aria-controls="history-drawer"[^>]*aria-expanded="false"/);
+  assert.match(htmlRes.body, /id="history-drawer"[^>]*aria-hidden="true"[^>]*\binert\b/);
 
   // 4. Malformed URL & bad Host are handled safely without throwing
   const badHostRes = await simulateRequest(handler, {
@@ -1148,6 +1154,10 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   const cssRes = await simulateRequest(handler, { method: 'GET', url: '/style.css' });
   assert.equal(cssRes.statusCode, 200);
   assert.ok(cssRes.body.includes('poker-table-surface'));
+  assert.match(cssRes.body, /\.pots-window\s*\{[^}]*visibility:\s*hidden;/s);
+  assert.match(cssRes.body, /\.pots-window\.open\s*\{[^}]*visibility:\s*visible;/s);
+  assert.match(cssRes.body, /\.history-drawer\s*\{[^}]*visibility:\s*hidden;/s);
+  assert.match(cssRes.body, /\.history-drawer\.open\s*\{[^}]*visibility:\s*visible;/s);
 
   // 5. GET /game.js
   const jsRes = await simulateRequest(handler, { method: 'GET', url: '/game.js' });

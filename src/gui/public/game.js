@@ -907,21 +907,39 @@
     elSoundIcon.textContent = active ? '🔊' : '🔇';
   });
 
+  function syncPanelAccessibility(panel, toggleBtn, isOpen) {
+    if (panel) {
+      panel.classList.toggle('open', isOpen);
+      panel.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+      panel.inert = !isOpen;
+      panel.toggleAttribute('inert', !isOpen);
+    }
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+  }
+
   // Hidable Table Pots Window Toggle
-  function togglePotsWindow(forceOpen) {
+  function togglePotsWindow(forceOpen, options = {}) {
     if (!elPotsWindow) return;
-    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : !elPotsWindow.classList.contains('open');
-    elPotsWindow.classList.toggle('open', shouldOpen);
+    const wasOpen = elPotsWindow.classList.contains('open');
+    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : !wasOpen;
+    const focusWasInside = Boolean(document.activeElement && elPotsWindow.contains(document.activeElement));
+    const shouldRestoreFocus = !shouldOpen && (Boolean(options.restoreFocus && wasOpen) || focusWasInside);
+    if (shouldRestoreFocus && elPotsToggleBtn) {
+      elPotsToggleBtn.focus();
+    }
+    syncPanelAccessibility(elPotsWindow, elPotsToggleBtn, shouldOpen);
     if (elPotsToggleBtn) {
       elPotsToggleBtn.classList.toggle('active', shouldOpen);
     }
   }
 
   if (elPotsToggleBtn) {
-    elPotsToggleBtn.addEventListener('click', () => togglePotsWindow());
+    elPotsToggleBtn.addEventListener('click', () => togglePotsWindow(undefined, { restoreFocus: true }));
   }
   if (elPotsWindowClose) {
-    elPotsWindowClose.addEventListener('click', () => togglePotsWindow(false));
+    elPotsWindowClose.addEventListener('click', () => togglePotsWindow(false, { restoreFocus: true }));
   }
 
   function isHandActiveStage(stage) {
@@ -1141,12 +1159,32 @@
   }
 
   // Log Drawer Handler
-  elLogToggleBtn.addEventListener('click', () => {
-    elHistoryDrawer.classList.toggle('open');
-  });
-  elDrawerClose.addEventListener('click', () => {
-    elHistoryDrawer.classList.remove('open');
-  });
+  function setHistoryDrawerOpen(shouldOpen, options = {}) {
+    if (!elHistoryDrawer) return;
+    const wasOpen = elHistoryDrawer.classList.contains('open');
+    const focusWasInside = Boolean(document.activeElement && elHistoryDrawer.contains(document.activeElement));
+    const shouldRestoreFocus = !shouldOpen && (Boolean(options.restoreFocus && wasOpen) || focusWasInside);
+    if (shouldRestoreFocus && elLogToggleBtn) {
+      elLogToggleBtn.focus();
+    }
+    syncPanelAccessibility(elHistoryDrawer, elLogToggleBtn, shouldOpen);
+  }
+
+  if (elLogToggleBtn) {
+    elLogToggleBtn.addEventListener('click', () => {
+      const shouldOpen = !Boolean(elHistoryDrawer && elHistoryDrawer.classList.contains('open'));
+      setHistoryDrawerOpen(shouldOpen, { restoreFocus: true });
+    });
+  }
+  if (elDrawerClose) {
+    elDrawerClose.addEventListener('click', () => {
+      setHistoryDrawerOpen(false, { restoreFocus: true });
+    });
+  }
+
+  // Sync initial accessibility state for collapsible panels
+  syncPanelAccessibility(elPotsWindow, elPotsToggleBtn, Boolean(elPotsWindow && elPotsWindow.classList.contains('open')));
+  syncPanelAccessibility(elHistoryDrawer, elLogToggleBtn, Boolean(elHistoryDrawer && elHistoryDrawer.classList.contains('open')));
 
   // Mount the 4 dynamically chosen opponents into the 4 table seats
   function mountOpponentSeats(opponents) {
@@ -1921,13 +1959,26 @@
       return;
     }
 
+    if (key === 'escape') {
+      if (elHistoryDrawer && elHistoryDrawer.classList.contains('open') && elHistoryDrawer.contains(document.activeElement)) {
+        e.preventDefault();
+        setHistoryDrawerOpen(false, { restoreFocus: true });
+        return;
+      }
+      if (elPotsWindow && elPotsWindow.classList.contains('open') && elPotsWindow.contains(document.activeElement)) {
+        e.preventDefault();
+        togglePotsWindow(false, { restoreFocus: true });
+        return;
+      }
+    }
+
     // Preserve native Space / Enter activation when a button or interactive element has keyboard focus
     if ((key === ' ' || key === 'enter') && isInteractiveFocusedElement(document.activeElement)) {
       return;
     }
 
     if (key === 'p') {
-      togglePotsWindow();
+      togglePotsWindow(undefined, { restoreFocus: true });
       return;
     }
     if (isActionLocked) return;
