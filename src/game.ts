@@ -2,7 +2,7 @@ import { Deck, type Card } from './card.js';
 import { compareHands, evaluateHand, type HandRank } from './poker.js';
 import { decideAction, MODES, type Mode } from './strategy.js';
 
-const STREETS = [
+export const STREETS = [
   { name: 'Pre-flop', bet: 10 },
   { name: 'Flop', bet: 20 },
   { name: 'Turn', bet: 30 },

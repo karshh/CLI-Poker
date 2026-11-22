@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIP Texas Hold'em - Casino Poker Video Game</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Ambient Casino Background Layer -->
+  <div class="casino-room">
+    <!-- Ceiling & Chandelier -->
+    <div class="ceiling">
+      <div class="chandelier">
+        <div class="chandelier-fixture"></div>
+        <div class="chandelier-crystals"></div>
+        <div class="chandelier-light-cone"></div>
+      </div>
+    </div>
+
+    <!-- Wall Sconces & Wallpaper -->
+    <div class="wall-bg">
+      <div class="sconce left">
+        <div class="sconce-lamp"></div>
+        <div class="sconce-glow"></div>
+      </div>
+      <div class="sconce right">
+        <div class="sconce-lamp"></div>
+        <div class="sconce-glow"></div>
+      </div>
+      <div class="casino-painting">
+        <div class="painting-frame">
+          <div class="painting-inner">HIGH ROLLER SALON</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Status Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <span class="suit-icon red"><svg class="suit-icon-svg" viewBox="0 0 24 28" fill="currentColor" style="width:13px;height:15px;display:inline-block;vertical-align:middle;"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg></span>
+        <span class="brand-title">ROYAL HIGH ROLLER POKER</span>
+        <span class="suit-icon black">♠</span>
+      </div>
+      <div class="stats-bar">
+        <button id="pots-toggle-btn" class="nav-pill-btn active" title="Show/Hide Opponent Pots Window (P)">
+          💰 Table Pots
+        </button>
+        <button id="pick-opponents-btn" class="nav-pill-btn" title="Choose 4 opponents from the 8 VIP characters">
+          👥 Select Opponents
+        </button>
+        <div class="stat-pill" id="stat-hand-pill">Hand: <span id="stat-hand-count">1</span></div>
+        <div class="stat-pill" id="stat-mode-pill">Difficulty: <span id="stat-difficulty">-</span></div>
+        <button id="sound-toggle" class="icon-btn" title="Toggle Sound (M)">
+          <span id="sound-icon">🔊</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 3D POV Casino Table Scene -->
+    <main class="pov-viewport">
+      <!-- HIDABLE OPPONENT POTS & STACKS FLOATING WINDOW -->
+      <aside class="pots-window open" id="pots-window" aria-label="Opponent Pots Tracker">
+        <div class="pots-window-header">
+          <span class="pots-window-title">💰 TABLE POTS</span>
+          <span class="pots-window-total" id="pots-window-total">Pot: $0</span>
+          <button class="pots-window-close" id="pots-window-close" title="Hide window (P)">&times;</button>
+        </div>
+        <div class="pots-window-cols">
+          <span>Player</span>
+          <span>In Pot</span>
+          <span>Won</span>
+          <span>Stack</span>
+        </div>
+        <div class="pots-window-body" id="pots-window-body">
+          <!-- Populated dynamically -->
+        </div>
+      </aside>
+
+      <!-- OPPONENT SELECTION MODAL (Shown before starting a new game) -->
+      <div class="opponent-modal-overlay" id="opponent-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="opponent-modal-title">
+        <div class="opponent-modal">
+          <div class="opponent-modal-header">
+            <div>
+              <h2 id="opponent-modal-title">🎰 Select Your Table Opponents</h2>
+              <p class="opponent-modal-subtitle">Choose <strong>4</strong> VIP opponents to sit at your poker table</p>
+            </div>
+            <div class="opponent-modal-counter" id="opponent-select-count">0 / 4 Selected</div>
+          </div>
+          <div class="opponent-picker-grid" id="opponent-picker-grid">
+            <!-- 7 illustrated VIP character cards injected here -->
+          </div>
+          <div class="opponent-modal-footer">
+            <button type="button" class="game-btn btn-default" id="btn-random-opponents">🎲 Random 4</button>
+            <button type="button" class="game-btn btn-primary" id="btn-confirm-opponents" disabled>
+              Sit Down &amp; Play →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pov-perspective-container">
+
+        <!-- UNIFIED TABLE & SEATED CHARACTERS SCENE -->
+        <div class="table-scene">
+
+          <!-- DEALER (Seated in Chair Behind Center Back of Table) -->
+          <div class="character-container dealer-slot" id="dealer-container">
+            <div class="speech-bubble" id="dealer-speech-bubble">
+              <span class="speech-text" id="dealer-bubble-text">Welcome to the VIP table.</span>
+            </div>
+            <div class="seated-character-wrapper">
+              <!-- Casino Dealer High-Back Leather Chair -->
+              <div class="casino-chair dealer-chair">
+                <svg viewBox="0 0 190 230" class="chair-svg" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="dealerChairWood" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#3d2410"/>
+                      <stop offset="100%" stop-color="#1c0f05"/>
+                    </linearGradient>
+                    <linearGradient id="dealerLeatherGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#24334a"/>
+                      <stop offset="50%" stop-color="#182234"/>
+                      <stop offset="100%" stop-color="#0c121e"/>
+                    </linearGradient>
+                    <linearGradient id="dealerCushionGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#2b3b55"/>
+                      <stop offset="100%" stop-color="#141c2b"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M 30 225 L 30 75 Q 30 18 95 15 Q 160 18 160 75 L 160 225 Z" fill="url(#dealerChairWood)" stroke="#d4af37" stroke-width="2.5"/>
+                  <circle cx="95" cy="15" r="7" fill="#ffd700" stroke="#b8860b" stroke-width="1.5"/>
+                  <circle cx="34" cy="50" r="5" fill="#ffd700" stroke="#b8860b" stroke-width="1"/>
+                  <circle cx="156" cy="50" r="5" fill="#ffd700" stroke="#b8860b" stroke-width="1"/>
+                  <path d="M 40 225 L 40 80 Q 40 28 95 26 Q 150 28 150 80 L 150 225 Z" fill="url(#dealerLeatherGrad)" stroke="#c59b27" stroke-width="1.5"/>
+                  <path d="M 60 70 L 95 105 L 130 70 M 60 115 L 95 150 L 130 115 M 95 60 L 60 95 L 95 130 L 130 95 Z" stroke="#3b4d6d" stroke-width="1.5" fill="none" opacity="0.7"/>
+                  <circle cx="95" cy="60" r="2.5" fill="#ffd700"/>
+                  <circle cx="60" cy="95" r="2.5" fill="#ffd700"/>
+                  <circle cx="130" cy="95" r="2.5" fill="#ffd700"/>
+                  <circle cx="95" cy="130" r="2.5" fill="#ffd700"/>
+                  <rect x="14" y="145" width="20" height="75" rx="6" fill="url(#dealerChairWood)" stroke="#d4af37" stroke-width="1.5"/>
+                  <rect x="10" y="140" width="28" height="14" rx="7" fill="url(#dealerCushionGrad)" stroke="#ffd700" stroke-width="1.5"/>
+                  <rect x="156" y="145" width="20" height="75" rx="6" fill="url(#dealerChairWood)" stroke="#d4af37" stroke-width="1.5"/>
+                  <rect x="152" y="140" width="28" height="14" rx="7" fill="url(#dealerCushionGrad)" stroke="#ffd700" stroke-width="1.5"/>
+                </svg>
+              </div>
+              <div class="avatar dealer-avatar" id="dealer-avatar">
+                <!-- Illustrated SVG Dealer Vincent -->
+                <svg viewBox="0 0 160 220" class="character-svg" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="hairGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#4a3728"/>
+                      <stop offset="100%" stop-color="#21150e"/>
+                    </linearGradient>
+                    <linearGradient id="skinGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#fbd9b9"/>
+                      <stop offset="100%" stop-color="#e8b992"/>
+                    </linearGradient>
+                    <linearGradient id="vestGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#2b2d42"/>
+                      <stop offset="100%" stop-color="#151724"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M 25 155 Q 80 145 135 155 L 145 220 L 15 220 Z" fill="url(#vestGrad)" />
+                  <polygon points="65,150 95,150 90,195 70,195" fill="#f8f9fa" />
+                  <polygon points="70,154 90,154 85,162 75,162" fill="#111" />
+                  <polygon points="70,162 75,162 80,157 85,162 90,162 82,168 78,168" fill="#222" />
+                  <circle cx="80" cy="160" r="3" fill="#d4af37" />
+                  <rect x="100" y="175" width="28" height="10" rx="2" fill="#ffd700" stroke="#b8860b" stroke-width="1"/>
+                  <text x="114" y="183" font-size="7" font-weight="bold" fill="#222" text-anchor="middle">VINCENT</text>
+                  <rect x="72" y="125" width="16" height="25" rx="4" fill="url(#skinGrad)" />
+                  <ellipse cx="80" cy="98" rx="28" ry="34" fill="url(#skinGrad)" />
+                  <path d="M 52 95 Q 52 65 80 62 Q 108 65 108 95 Q 106 72 80 70 Q 56 72 52 95 Z" fill="url(#hairGrad)" />
+                  <circle cx="51" cy="98" r="6" fill="#e8b992" />
+                  <circle cx="109" cy="98" r="6" fill="#e8b992" />
+                  <ellipse cx="69" cy="95" rx="3.5" ry="2.5" fill="#222" />
+                  <ellipse cx="91" cy="95" rx="3.5" ry="2.5" fill="#222" />
+                  <path d="M 64 88 Q 70 86 75 88" stroke="#332211" stroke-width="2" fill="none" />
+                  <path d="M 85 88 Q 90 86 96 88" stroke="#332211" stroke-width="2" fill="none" />
+                  <path d="M 80 94 L 78 103 L 83 104" stroke="#d2996d" stroke-width="2" fill="none" stroke-linecap="round"/>
+                  <path d="M 72 113 Q 80 119 88 113" stroke="#aa4444" stroke-width="2.5" fill="none" stroke-linecap="round" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4 DYNAMIC OPPONENT SEATS (POPULATED FROM THE 6 VIP CHARACTERS) -->
+          <div class="character-container seat-far-left" id="seat-far-left"></div>
+          <div class="character-container seat-top-left" id="seat-top-left"></div>
+          <div class="character-container seat-top-right" id="seat-top-right"></div>
+          <div class="character-container seat-far-right" id="seat-far-right"></div>
+
+          <!-- THE POKER TABLE (3D POV View - In Front of All 5 Seated Chairs) -->
+          <div class="poker-table-surface">
+            <!-- Outer Mahogany Wood Rail & Padded Leather Bumper -->
+            <div class="table-rail">
+              <div class="table-felt">
+                <!-- Oval Gold Betting Line -->
+                <div class="felt-betting-line"></div>
+
+                <!-- Dealer Chip Rack (Recessed in far edge) -->
+                <div class="dealer-chip-tray">
+                  <div class="tray-row red-chips"></div>
+                  <div class="tray-row blue-chips"></div>
+                  <div class="tray-row green-chips"></div>
+                  <div class="tray-row gold-chips"></div>
+                </div>
+
+                <!-- 4 DYNAMIC OPPONENT FELT CARD & CHIP ZONES -->
+                <div class="opp-table-items felt-far-left" id="felt-far-left"></div>
+                <div class="opp-table-items felt-top-left" id="felt-top-left"></div>
+                <div class="opp-table-items felt-top-right" id="felt-top-right"></div>
+                <div class="opp-table-items felt-far-right" id="felt-far-right"></div>
+
+                <!-- Center Table Logo -->
+                <div class="table-center-logo">
+                  <div class="logo-text">TEXAS HOLD'EM</div>
+                  <div class="logo-sub">NO LIMIT CASINO LOUNGE</div>
+                </div>
+
+                <!-- THE POT & CHIPS IN MIDDLE -->
+                <div class="table-pot-area" id="pot-area">
+                  <div class="pot-chips-visual" id="pot-chips-visual"></div>
+                  <div class="pot-badge" id="pot-badge">
+                    <span class="pot-label">POT</span>
+                    <span class="pot-amount" id="pot-amount">$0</span>
+                  </div>
+                  <div class="dealer-button" id="dealer-button" title="Dealer Button">D</div>
+                </div>
+
+                <!-- 5 COMMUNITY CARDS SLOTS -->
+                <div class="community-cards-container" id="community-cards-container">
+                  <div class="card-slot" id="slot-0"><span class="slot-label">FLOP 1</span></div>
+                  <div class="card-slot" id="slot-1"><span class="slot-label">FLOP 2</span></div>
+                  <div class="card-slot" id="slot-2"><span class="slot-label">FLOP 3</span></div>
+                  <div class="card-slot" id="slot-3"><span class="slot-label">TURN</span></div>
+                  <div class="card-slot" id="slot-4"><span class="slot-label">RIVER</span></div>
+                </div>
+
+                <!-- CURRENT STREET BADGE -->
+                <div class="street-banner" id="street-banner">PRE-FLOP</div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- NAMEPLATES PINNED CLEANLY ON MAHOGANY TABLE RAIL -->
+          <div class="character-nameplate dealer-nameplate">
+            <span class="badge-role">DEALER</span> Vincent
+          </div>
+
+          <div class="character-nameplate opp-nameplate nameplate-far-left" id="nameplate-slot-far-left"></div>
+          <div class="character-nameplate opp-nameplate nameplate-top-left" id="nameplate-slot-top-left"></div>
+          <div class="character-nameplate opp-nameplate nameplate-top-right" id="nameplate-slot-top-right"></div>
+          <div class="character-nameplate opp-nameplate nameplate-far-right" id="nameplate-slot-far-right"></div>
+
+        </div><!-- /.table-scene -->
+
+        <!-- PLAYER POV (Foreground: Cards in hand & Player Chips) -->
+        <div class="player-pov-area">
+          <div class="player-left-chips">
+            <div class="chip-count-tag player-chip-tag" id="player-chip-tag">Your Stack: $500</div>
+            <div class="chips-stack-visual" id="player-chips-visual"></div>
+          </div>
+
+          <div class="player-hand-wrapper">
+            <div class="hand-label-banner" id="player-hand-rank">Dealing cards...</div>
+            <div class="player-cards-container" id="player-cards-container">
+              <div class="card card-placeholder" id="player-card-1"></div>
+              <div class="card card-placeholder" id="player-card-2"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- CINEMATIC DIALOGUE & ACTION HUD BAR (At Bottom) -->
+    <footer class="bottom-hud">
+      <div class="hud-inner">
+        <!-- Dialogue Box -->
+        <div class="dialogue-panel">
+          <div class="speaker-identity">
+            <div class="speaker-avatar-thumb" id="speaker-thumb">🤵</div>
+            <div class="speaker-meta">
+              <span class="speaker-badge" id="speaker-name">DEALER VINCENT</span>
+              <span class="street-status" id="hud-street-status">Street: Pre-flop</span>
+            </div>
+            <button class="log-toggle-btn" id="log-toggle-btn" title="View Full Log">📜 Log</button>
+          </div>
+
+          <!-- Main Dialogue Text Display -->
+          <div class="dialogue-text-container">
+            <p class="dialogue-text" id="dialogue-main-text">
+              Welcome to the VIP High Roller Lounge. Shuffling deck...
+            </p>
+          </div>
+        </div>
+
+        <!-- Interactive Action Options (Appears when prompt is required) -->
+        <div class="actions-panel" id="actions-panel">
+          <div class="action-prompt-title" id="action-prompt-title">Your Action:</div>
+          <div class="action-buttons-group" id="action-buttons-group">
+            <!-- Dynamic prompt buttons injected here -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Expandable Log History Modal / Drawer -->
+      <div class="history-drawer" id="history-drawer">
+        <div class="drawer-header">
+          <span>Game History & Lessons</span>
+          <button class="drawer-close" id="drawer-close">&times;</button>
+        </div>
+        <div class="drawer-content" id="drawer-content"></div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

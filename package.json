@@ -18,6 +18,8 @@
     "build": "node node_modules/typescript/lib/tsc.js -p tsconfig.json",
     "prestart": "npm run build",
     "start": "node dist/src/index.js",
+    "pregui": "npm run build",
+    "gui": "node dist/src/gui/index.js",
     "test": "npm run build && node --test dist/test/*.test.js"
   },
   "keywords": [],

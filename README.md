@@ -14,11 +14,30 @@ npm ci
 npm run build
 ```
 
-Start the game with `npm start` (which builds first), or run `node dist/src/index.js` after building. Run the unit tests with:
+Start the CLI game with `npm start` (which builds first), or start the graphical POV video game with:
+
+```sh
+npm run gui
+```
+
+Run the unit tests with:
 
 ```sh
 npm test
 ```
+
+## GUI Video Game (`npm run gui`)
+
+Running `npm run gui` launches a graphical first-person POV (point-of-view) Texas Hold'em video game set in a luxury VIP high-roller casino lounge:
+
+- **First-Person POV**: You are seated at the 5-seat oval poker table looking across the green felt, with your two hole cards in the foreground and crisp vector card suits.
+- **Casino Environment**: A warm VIP salon with chandelier lighting, wall sconces, velvet wallpaper, mahogany table rail, and luxury casino chairs seated behind the rail.
+- **Dealer (Vincent)**: Seated at center-back of the table managing the chip rack, dealing community cards, and narrating showdown results.
+- **8 VIP Opponents (Choose 4 per Table)**: Before starting a game, pick any 4 of 8 distinct illustrated opponents (or deal a random 4) — **Lord Reginald**, **"Big Oil" Buck**, **"Croc" Bruce**, **Elon Musk**, **Comrade Viktor**, **Madame Mei-Ling**, **Don "Big Tony"**, and **Sheikh Tariq** — each with themed chairs, accents, sequential 1–2 second thinking & decision chat bubbles, and strict card privacy until Showdown.
+- **Hidable Table Pots Window**: Toggleable floating tracker (`P` or `💰 Table Pots`) showing each opponent's current hand contribution, total pots won, and chip stack live as turns unfold.
+- **Cinematic HUD**: Bottom panel displays live narrative dialogue, full win/loss hand comparisons, expandable game log, and action buttons.
+- **Hotkeys**: `C` (Check/Call), `B` (Bet), `F` (Fold), `1`/`2`/`3` (Difficulty), `R` (Random 4 Opponents), `P` (Toggle Table Pots window), `Space` (Play Again), `M` (Mute/Unmute).
+- **Audio**: Built-in procedural Web Audio synthesizer (card whooshes, chip clacks, table knocks, win fanfare).
 
 ## Docker
 
