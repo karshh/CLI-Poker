@@ -1084,6 +1084,120 @@ test('PokerGameEngine restricts roster changes during active hand & game_over, p
   }
 });
 
+test('PokerGameEngine labels and logs big-blind pre-flop raises as raises while keeping post-flop opening bets as bets', () => {
+  // 1. Player in BB pre-flop with toCall === 0 after limps: button reads "Raise to $20 (+$10)", log says "You raise to $20 (+$10)."
+  const bbEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 3, // BTN=elon, SB=tony, BB=You, UTG=reginald, CO=buck
+    random: () => 0.5, // opponents limp/check/call
+  });
+  bbEngine.act('select_opponents:reginald,buck,elon,tony');
+  const bbPrompt = bbEngine.act('easy');
+  assert.equal(bbPrompt.playerPosition, 'BB');
+  assert.equal(bbPrompt.stage, 'player_action');
+  assert.equal(bbPrompt.playerHandContribution, 10);
+  assert.equal(bbPrompt.currentBet, 10);
+  assert.equal(bbPrompt.prompt?.choices.find((c) => c.id === 'check')?.label, 'Check');
+  assert.equal(bbPrompt.prompt?.choices.find((c) => c.id === 'bet')?.label, 'Raise to $20 (+$10)');
+  assert.equal(bbPrompt.prompt?.choices.find((c) => c.id === 'fold')?.label, 'Fold');
+
+  const afterBbRaise = bbEngine.act('bet');
+  assert.ok(
+    afterBbRaise.narrative.some((e) => e.speaker === 'You' && e.text === 'You raise to $20 (+$10).'),
+    'BB pre-flop raise must log "You raise to $20 (+$10)."',
+  );
+  assert.ok(
+    !afterBbRaise.narrative.some((e) => e.speaker === 'You' && e.text === 'You bet $10.'),
+    'BB pre-flop raise must not log "You bet $10."',
+  );
+  const preFlopResponses = afterBbRaise.turnEvents.filter((e) => e.streetName === 'Pre-flop');
+  assert.equal(preFlopResponses.length, 4);
+  for (const ev of preFlopResponses) {
+    assert.equal(ev.action, 'call');
+    assert.equal(ev.amount, 10, `Each opponent should face $10 more after BB raises to $20, saw $${ev.amount}`);
+  }
+  assert.equal(afterBbRaise.streetName, 'Flop');
+  assert.equal(afterBbRaise.playerHandContribution, 20);
+  assert.equal(afterBbRaise.pot, 100);
+
+  // 2. Normal post-flop opening bet (currentStreetHighBet === 0) must still read "Bet $20" and log "You bet $20."
+  assert.equal(afterBbRaise.stage, 'player_action');
+  assert.equal(afterBbRaise.prompt?.choices.find((c) => c.id === 'bet')?.label, 'Bet $20');
+  const afterFlopBet = bbEngine.act('bet');
+  assert.ok(
+    afterFlopBet.narrative.some((e) => e.speaker === 'You' && e.text === 'You bet $20.'),
+    'Normal post-flop opening bet must still log "You bet $20."',
+  );
+
+  // 3. Short-stacked BB ($15 starting stack -> posts $10 BB, $5 left): button reads "All-in to $15 (+$5)"
+  const shortBbAllInEngine = new PokerGameEngine({
+    initialPlayerChips: 15,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 3, // You = BB
+    random: () => 0.5,
+  });
+  shortBbAllInEngine.act('select_opponents:reginald,buck,elon,tony');
+  const shortPrompt = shortBbAllInEngine.act('easy');
+  assert.equal(shortPrompt.playerPosition, 'BB');
+  assert.equal(shortPrompt.stage, 'player_action');
+  assert.equal(shortPrompt.playerChips, 5);
+  assert.equal(shortPrompt.prompt?.choices.find((c) => c.id === 'bet')?.label, 'All-in to $15 (+$5)');
+
+  const afterShortRaise = shortBbAllInEngine.act('raise');
+  assert.ok(
+    afterShortRaise.narrative.some((e) => e.speaker === 'You' && e.text === 'You raise all-in to $15 (+$5).'),
+    'Short-stack BB all-in raise must log raise all-in to $15 (+$5)',
+  );
+  const shortPreFlopCalls = afterShortRaise.turnEvents.filter((e) => e.streetName === 'Pre-flop');
+  assert.equal(shortPreFlopCalls.length, 4);
+  for (const ev of shortPreFlopCalls) {
+    assert.equal(ev.action, 'call');
+    assert.equal(ev.amount, 5);
+  }
+
+  // 4. AI opponent in BB pre-flop (toCall === 0 && currentStreetHighBet === 10) raising logs "Raises to $20." & badge "Raises to $20"
+  const makeAiBbRaiseDeck = () => {
+    const cards = [
+      new Card('♠', 'K'), new Card('♥', 'Q'), // Player (BTN)
+      new Card('♣', '4'), new Card('♦', '8'), // Seat 1: Reginald (SB -> calls $5, never raises)
+      new Card('♠', 'A'), new Card('♥', 'A'), // Seat 2: Buck (BB -> raises to $20!)
+      new Card('♥', '4'), new Card('♣', '8'), // Seat 3: Elon (UTG -> limps $10)
+      new Card('♠', '4'), new Card('♥', '8'), // Seat 4: Tony (CO -> limps $10)
+      new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+      new Card('♣', 'J'),
+      new Card('♥', '3'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+  const aiBbEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 0, // BTN=You, SB=reginald, BB=buck, UTG=elon, CO=tony
+    random: () => 0.5,
+    deckFactory: makeAiBbRaiseDeck,
+  });
+  aiBbEngine.act('select_opponents:reginald,buck,elon,tony');
+  const beforeBtnCall = aiBbEngine.act('hard');
+  assert.equal(beforeBtnCall.playerPosition, 'BTN');
+  assert.equal(beforeBtnCall.stage, 'player_response');
+
+  const afterBtnCall = aiBbEngine.act('call');
+  const buckOpp = afterBtnCall.opponents.find((o) => o.id === 'buck')!;
+  const buckRaiseEvent = afterBtnCall.turnEvents.find((e) => e.opponentId === 'buck' && e.streetName === 'Pre-flop');
+  assert.ok(buckRaiseEvent, 'Expected pre-flop turnEvent for BB (Buck)');
+  assert.equal(buckRaiseEvent.action, 'bet');
+  assert.equal(buckRaiseEvent.actionBadge, 'Raises to $20');
+  assert.equal(buckOpp.lastAction, 'Raises to $20');
+  assert.ok(
+    afterBtnCall.narrative.some((e) => e.speaker === 'Buck' && e.text === 'Raises to $20.'),
+    'AI BB pre-flop raise must log "Raises to $20." instead of "Bets $10."',
+  );
+  assert.ok(
+    !afterBtnCall.narrative.some((e) => e.speaker === 'Buck' && e.text === 'Bets $10.'),
+    'AI BB pre-flop raise must not log "Bets $10."',
+  );
+  assert.equal(afterBtnCall.stage, 'player_response');
+  assert.equal(afterBtnCall.currentBet, 10, 'Player (BTN) must face $10 more after AI BB raises to $20');
+  assert.equal(afterBtnCall.prompt?.choices.find((c) => c.id === 'call')?.label, 'Call $10');
+});
+
 test('HTTP request handler serves state, static files, and handles actions', async () => {
   const engine = new PokerGameEngine();
   const handler = createPokerRequestHandler(engine);

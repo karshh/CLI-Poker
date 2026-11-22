@@ -1960,6 +1960,63 @@ test(
           },
         );
       }
+      // TEST 15: Big-Blind Pre-flop Raise Button & Log Entry (Issue #6)
+      // ----------------------------------------------------------------------
+      await t.test('big-blind pre-flop raise button reads Raise to $20 (+$10), logs You raise to $20 (+$10)., and opponents face $10 more', async () => {
+        await withGamePage(
+          async ({ page, baseUrl }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop • BB');
+
+            const betBtn = page.locator('#action-buttons-group button[data-choice-id="bet"]');
+            const betBtnText = (await betBtn.locator('span').first().textContent())?.trim();
+            assert.equal(betBtnText, 'Raise to $20 (+$10)');
+
+            const actionRespPromise = page.waitForResponse((r) => r.url().includes('/api/action'));
+            await betBtn.click();
+            const actionResp = await actionRespPromise;
+            const afterRaiseState = (await actionResp.json()) as SerializedGameState;
+
+            const preFlopEvents = afterRaiseState.turnEvents.filter((e) => e.streetName === 'Pre-flop');
+            assert.equal(preFlopEvents.length, 4);
+            for (const ev of preFlopEvents) {
+              assert.equal(ev.action, 'call');
+              assert.equal(ev.amount, 10, `Expected opponent ${ev.opponentId} to face $10 more`);
+            }
+
+            await waitForPromptReady(page, 'Flop • BB');
+
+            // Open Log drawer and verify "You raise to $20 (+$10)." appears (never "You bet $10.")
+            await page.locator('#log-toggle-btn').click();
+            await page.waitForSelector('#history-drawer.open');
+            const logTexts = await page.locator('#drawer-content .log-entry').allTextContents();
+            assert.ok(
+              logTexts.some((t) => t.includes('[You]') && t.includes('You raise to $20 (+$10).')),
+              `Expected Log to include "You raise to $20 (+$10).", got: ${JSON.stringify(logTexts)}`,
+            );
+            assert.ok(
+              !logTexts.some((t) => t.includes('You bet $10.')),
+              `Log must not include "You bet $10.", got: ${JSON.stringify(logTexts)}`,
+            );
+
+            // Post-flop opening bet button still reads "Bet $20"
+            const flopBetText = (
+              await page.locator('#action-buttons-group button[data-choice-id="bet"] span').first().textContent()
+            )?.trim();
+            assert.equal(flopBetText, 'Bet $20');
+
+            const finalState = await apiGetState(baseUrl);
+            assert.equal(finalState.playerHandContribution, 20);
+            assert.equal(finalState.pot, 100);
+          },
+          { turnSpeed: 0.02, engineOptions: { initialButtonSeatIndex: 3, random: () => 0.5 } },
+        );
+      });
     } finally {
       await browser.close();
     }
