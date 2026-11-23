@@ -2582,7 +2582,7 @@ test(
         };
 
         await withGamePage(
-          async ({ page }) => {
+          async ({ page, baseUrl }) => {
             const speedBtn = page.locator('#speed-toggle-btn');
             // 1. Fresh load without ?turnSpeed= defaults to 1x
             assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
@@ -2837,6 +2837,50 @@ test(
             );
             assert.equal((await page.locator('#street-banner').textContent())?.trim(), 'FLOP');
             assert.equal(await page.locator('#community-cards-container .card').count(), 3);
+
+            // 7. Opening with ?turnSpeed=4x displays the effective 4x speed on #speed-toggle-btn, and cycling the speed button to 2x replaces the URL override so the initial 350ms playback delay schedules at 175ms (2x) rather than 88ms (4x)
+            await page.goto(`${baseUrl}/?turnSpeed=4x`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Flop');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 4x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '4x');
+
+            // Cycle 4x -> 1x -> 2x
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '1x');
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 2x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '2x');
+
+            await page.evaluate(() => {
+              const scheduled: number[] = [];
+              (window as unknown as { __OVERRIDE_DELAYS__: number[] }).__OVERRIDE_DELAYS__ = scheduled;
+              const origSetTimeout = window.setTimeout.bind(window);
+              window.setTimeout = ((fn: TimerHandler, timeout?: number, ...args: unknown[]) => {
+                if (typeof timeout === 'number' && timeout > 50) {
+                  scheduled.push(timeout);
+                }
+                return origSetTimeout(fn, timeout, ...args);
+              }) as typeof window.setTimeout;
+            });
+
+            // On Hand #2 Player is CO, so checking on Flop triggers BTN (reginald) to act and schedules the initial 350ms delay at 2x (175ms)
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Turn');
+            const overrideDelays = await page.evaluate(
+              () => (window as unknown as { __OVERRIDE_DELAYS__: number[] }).__OVERRIDE_DELAYS__,
+            );
+            assert.ok(
+              overrideDelays.includes(175),
+              `Expected cycling from ?turnSpeed=4x to 2x to schedule the 350ms delay at 175ms (2x), got: ${JSON.stringify(overrideDelays)}`,
+            );
+            assert.equal(
+              overrideDelays.includes(88),
+              false,
+              `Expected 4x delay (88ms) to be replaced once user selects 2x, got: ${JSON.stringify(overrideDelays)}`,
+            );
           },
           {
             // No turnSpeed option here so we test the real default 1x and header speed toggle!

@@ -968,16 +968,27 @@
       if (raw === null || raw === '') return null;
       const trimmed = raw.trim().toLowerCase();
       const preset = SPEED_PRESETS.find((p) => p.id === trimmed);
-      if (preset) return preset.multiplier;
+      if (preset) {
+        return { presetId: preset.id, multiplier: preset.multiplier };
+      }
       const num = Number(trimmed);
-      if (Number.isFinite(num) && num >= 0) return num;
+      if (Number.isFinite(num) && num >= 0) {
+        const matchedPreset = SPEED_PRESETS.find((p) => Math.abs(p.multiplier - num) < 1e-6);
+        return {
+          presetId: matchedPreset ? matchedPreset.id : null,
+          multiplier: num,
+        };
+      }
     } catch {
       // ignore URL parse error
     }
     return null;
   }
 
-  function loadInitialSpeedPresetId() {
+  function loadInitialSpeedPresetId(queryOverride) {
+    if (queryOverride && queryOverride.presetId) {
+      return queryOverride.presetId;
+    }
     try {
       const saved = window.localStorage ? window.localStorage.getItem(TURN_SPEED_STORAGE_KEY) : null;
       if (saved && SPEED_PRESETS.some((p) => p.id === saved)) {
@@ -989,8 +1000,9 @@
     return '1x';
   }
 
-  let currentSpeedPresetId = loadInitialSpeedPresetId();
-  const queryTurnSpeedOverride = parseQueryTurnSpeed();
+  const initialQueryTurnSpeed = parseQueryTurnSpeed();
+  let queryTurnSpeedOverride = initialQueryTurnSpeed ? initialQueryTurnSpeed.multiplier : null;
+  let currentSpeedPresetId = loadInitialSpeedPresetId(initialQueryTurnSpeed);
 
   function getTurnSpeedMultiplier() {
     if (queryTurnSpeedOverride !== null) {
@@ -1160,6 +1172,19 @@
   // Playback Speed Toggle Handler (1x -> 2x -> 4x -> 1x)
   function updateSpeedToggleUI() {
     if (!elSpeedToggleBtn) return;
+    if (queryTurnSpeedOverride !== null) {
+      const matched = SPEED_PRESETS.find((p) => Math.abs(p.multiplier - queryTurnSpeedOverride) < 1e-6);
+      if (matched) {
+        elSpeedToggleBtn.textContent = matched.label;
+        elSpeedToggleBtn.dataset.speed = matched.id;
+        elSpeedToggleBtn.classList.toggle('active', matched.id !== '1x');
+        return;
+      }
+      elSpeedToggleBtn.textContent = `⚡ Speed: Custom (${queryTurnSpeedOverride}x)`;
+      elSpeedToggleBtn.dataset.speed = 'custom';
+      elSpeedToggleBtn.classList.add('active');
+      return;
+    }
     const preset = SPEED_PRESETS.find((p) => p.id === currentSpeedPresetId) || SPEED_PRESETS[0];
     elSpeedToggleBtn.textContent = preset.label;
     elSpeedToggleBtn.dataset.speed = preset.id;
@@ -1169,6 +1194,11 @@
   function cyclePlaybackSpeed() {
     const idx = SPEED_PRESETS.findIndex((p) => p.id === currentSpeedPresetId);
     const nextPreset = SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length];
+    // Explicitly selecting a speed preset replaces any active ?turnSpeed= URL or global override
+    queryTurnSpeedOverride = null;
+    if (typeof window.__POKER_TURN_SPEED__ !== 'undefined') {
+      delete window.__POKER_TURN_SPEED__;
+    }
     currentSpeedPresetId = nextPreset.id;
     try {
       if (window.localStorage) {
