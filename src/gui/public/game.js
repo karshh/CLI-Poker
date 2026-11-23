@@ -945,10 +945,63 @@
   let currentState = null;
   let activeHotkeys = {};
   let isActionLocked = false;
+  let isPlayingTurns = false;
+  let skipCurrentPlayback = false;
+  let skipPlaybackHadFocus = false;
+  let activeDelayCancel = null;
   let renderedRosterKey = '';
   let pickedOpponentIds = [];
   let pickerBuilt = false;
   let pickerOpenedManually = false;
+
+  const TURN_SPEED_STORAGE_KEY = 'high_roller_turn_speed';
+  const SPEED_PRESETS = [
+    { id: '1x', label: '⚡ Speed: 1x', multiplier: 1.0 },
+    { id: '2x', label: '⚡ Speed: 2x', multiplier: 0.5 },
+    { id: '4x', label: '⚡ Speed: 4x', multiplier: 0.25 },
+  ];
+
+  function parseQueryTurnSpeed() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const raw = params.get('turnSpeed');
+      if (raw === null || raw === '') return null;
+      const trimmed = raw.trim().toLowerCase();
+      const preset = SPEED_PRESETS.find((p) => p.id === trimmed);
+      if (preset) return preset.multiplier;
+      const num = Number(trimmed);
+      if (Number.isFinite(num) && num >= 0) return num;
+    } catch {
+      // ignore URL parse error
+    }
+    return null;
+  }
+
+  function loadInitialSpeedPresetId() {
+    try {
+      const saved = window.localStorage ? window.localStorage.getItem(TURN_SPEED_STORAGE_KEY) : null;
+      if (saved && SPEED_PRESETS.some((p) => p.id === saved)) {
+        return saved;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return '1x';
+  }
+
+  let currentSpeedPresetId = loadInitialSpeedPresetId();
+  const queryTurnSpeedOverride = parseQueryTurnSpeed();
+
+  function getTurnSpeedMultiplier() {
+    if (queryTurnSpeedOverride !== null) {
+      return queryTurnSpeedOverride;
+    }
+    if (typeof window.__POKER_TURN_SPEED__ === 'number' && Number.isFinite(window.__POKER_TURN_SPEED__)) {
+      return window.__POKER_TURN_SPEED__;
+    }
+    const preset = SPEED_PRESETS.find((p) => p.id === currentSpeedPresetId) || SPEED_PRESETS[0];
+    return preset.multiplier;
+  }
 
   const SPEAKER_ICONS = {
     Dealer: '🤵',
@@ -965,8 +1018,42 @@
   };
 
   function delay(ms) {
-    const speed = typeof window.__POKER_TURN_SPEED__ === 'number' ? window.__POKER_TURN_SPEED__ : 1;
-    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.round(ms * speed))));
+    if (skipCurrentPlayback) {
+      return Promise.resolve();
+    }
+    const speed = getTurnSpeedMultiplier();
+    const waitMs = Math.max(0, Math.round(ms * speed));
+    if (waitMs <= 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (activeDelayCancel === finish) {
+          activeDelayCancel = null;
+        }
+        resolve();
+      };
+      const timer = setTimeout(finish, waitMs);
+      activeDelayCancel = finish;
+    });
+  }
+
+  function triggerSkipPlayback() {
+    if (!isPlayingTurns) return;
+    if (
+      elSkipPlaybackBtn &&
+      (document.activeElement === elSkipPlaybackBtn || elSkipPlaybackBtn.contains(document.activeElement))
+    ) {
+      skipPlaybackHadFocus = true;
+    }
+    skipCurrentPlayback = true;
+    if (typeof activeDelayCancel === 'function') {
+      activeDelayCancel();
+    }
   }
 
   // DOM Elements
@@ -977,6 +1064,8 @@
   const elSoundIcon = document.getElementById('sound-icon');
   const elPotsToggleBtn = document.getElementById('pots-toggle-btn');
   const elPickOpponentsBtn = document.getElementById('pick-opponents-btn');
+  const elSpeedToggleBtn = document.getElementById('speed-toggle-btn');
+  const elSkipPlaybackBtn = document.getElementById('skip-playback-btn');
 
   // Hidable Table Pots Window Elements
   const elPotsWindow = document.getElementById('pots-window');
@@ -1066,6 +1155,44 @@
     if (toggleBtn) {
       toggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     }
+  }
+
+  // Playback Speed Toggle Handler (1x -> 2x -> 4x -> 1x)
+  function updateSpeedToggleUI() {
+    if (!elSpeedToggleBtn) return;
+    const preset = SPEED_PRESETS.find((p) => p.id === currentSpeedPresetId) || SPEED_PRESETS[0];
+    elSpeedToggleBtn.textContent = preset.label;
+    elSpeedToggleBtn.dataset.speed = preset.id;
+    elSpeedToggleBtn.classList.toggle('active', preset.id !== '1x');
+  }
+
+  function cyclePlaybackSpeed() {
+    const idx = SPEED_PRESETS.findIndex((p) => p.id === currentSpeedPresetId);
+    const nextPreset = SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length];
+    currentSpeedPresetId = nextPreset.id;
+    try {
+      if (window.localStorage) {
+        window.localStorage.setItem(TURN_SPEED_STORAGE_KEY, currentSpeedPresetId);
+      }
+    } catch {
+      // ignore storage errors
+    }
+    updateSpeedToggleUI();
+  }
+
+  if (elSpeedToggleBtn) {
+    updateSpeedToggleUI();
+    elSpeedToggleBtn.addEventListener('click', () => {
+      ensureAudio();
+      cyclePlaybackSpeed();
+    });
+  }
+
+  if (elSkipPlaybackBtn) {
+    elSkipPlaybackBtn.addEventListener('click', () => {
+      ensureAudio();
+      triggerSkipPlayback();
+    });
   }
 
   // Hidable Table Pots Window Toggle
@@ -1616,7 +1743,7 @@
     elDialogueMainText.textContent = `${event.opponentName} is thinking... "${event.thinkingSpeech}"`;
   }
 
-  function applyOpponentDecision(event) {
+  function applyOpponentDecision(event, options = {}) {
     const id = event.opponentId;
     const elContainer = findSeatContainerByOppId(id);
     const elNameplate = findNameplateByOppId(id);
@@ -1670,12 +1797,14 @@
     elSpeakerThumb.textContent = SPEAKER_ICONS[event.shortName] || '🎰';
     elDialogueMainText.textContent = `${event.opponentName}: "${event.decisionSpeech}" (${event.actionBadge})`;
 
-    if (event.action === 'bet' || event.action === 'call') {
-      sfx.playChipSound();
-    } else if (event.action === 'check') {
-      sfx.playKnock();
-    } else if (event.action === 'fold') {
-      sfx.playCardDeal();
+    if (!options.suppressSfx) {
+      if (event.action === 'bet' || event.action === 'call') {
+        sfx.playChipSound();
+      } else if (event.action === 'check') {
+        sfx.playKnock();
+      } else if (event.action === 'fold') {
+        sfx.playCardDeal();
+      }
     }
   }
 
@@ -1732,6 +1861,9 @@
 
     const events = nextState.turnEvents;
     if (!Array.isArray(events) || events.length === 0) {
+      isPlayingTurns = false;
+      skipCurrentPlayback = false;
+      if (elSkipPlaybackBtn) elSkipPlaybackBtn.hidden = true;
       isActionLocked = false;
       renderState(nextState);
       return;
@@ -1742,7 +1874,14 @@
       closeOpponentDialog();
     }
 
+    isPlayingTurns = true;
+    skipCurrentPlayback = false;
+    skipPlaybackHadFocus = false;
     lockActionsDuringTurns('Opponents are making their decisions...');
+    if (elSkipPlaybackBtn) {
+      elSkipPlaybackBtn.hidden = false;
+      elSkipPlaybackBtn.disabled = false;
+    }
 
     // If a new hand just started (e.g. clicking Easy or Play Again), clear old bubbles/board & deal player cards right away
     const isNewHandStart = !currentState || nextState.handCount !== currentState.handCount;
@@ -1853,7 +1992,9 @@
               slot.innerHTML = renderCardHTML(cardData);
             }
           }
-          sfx.playCardFlip();
+          if (!skipCurrentPlayback) {
+            sfx.playCardFlip();
+          }
         }
         elDealerBubbleText.textContent = `${event.streetName} dealt! Opponents contest the side pot...`;
         elDealerBubble.classList.add('active');
@@ -1872,7 +2013,7 @@
       const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
       await delay(thinkDurationMs);
 
-      applyOpponentDecision(event);
+      applyOpponentDecision(event, { suppressSfx: skipCurrentPlayback });
       livePots.pot = event.potAfter;
       livePots.opponents[event.opponentId] = {
         chips: event.chipsAfter,
@@ -1885,8 +2026,27 @@
       await delay(650);
     }
 
+    const wasSkipped = skipCurrentPlayback;
+    const shouldMoveFocusToAction =
+      skipPlaybackHadFocus ||
+      Boolean(
+        elSkipPlaybackBtn &&
+          (document.activeElement === elSkipPlaybackBtn || elSkipPlaybackBtn.contains(document.activeElement)),
+      );
+    isPlayingTurns = false;
+    skipCurrentPlayback = false;
+    skipPlaybackHadFocus = false;
+    if (elSkipPlaybackBtn) {
+      elSkipPlaybackBtn.hidden = true;
+    }
     isActionLocked = false;
-    renderState(nextState, { skipActionSfx: true });
+    renderState(nextState, { skipActionSfx: true, skipBoardFlipSfx: wasSkipped });
+    if (shouldMoveFocusToAction && elActionButtonsGroup) {
+      const firstActionBtn = elActionButtonsGroup.querySelector('button:not(:disabled)');
+      if (firstActionBtn && typeof firstActionBtn.focus === 'function') {
+        firstActionBtn.focus();
+      }
+    }
   }
 
   // Render Game State
@@ -2044,7 +2204,7 @@
       }
     }
 
-    if (prevState && state.board.length > prevState.board.length) {
+    if (!options.skipBoardFlipSfx && prevState && state.board.length > prevState.board.length) {
       sfx.playCardFlip();
     }
 
@@ -2063,6 +2223,9 @@
   function renderActions(prompt) {
     elActionButtonsGroup.innerHTML = '';
     activeHotkeys = {};
+    if (elSkipPlaybackBtn && !isPlayingTurns) {
+      elSkipPlaybackBtn.hidden = true;
+    }
 
     if (!prompt || !prompt.choices || prompt.choices.length === 0) {
       elActionPromptTitle.textContent = 'Waiting...';
@@ -2186,6 +2349,11 @@
 
     if (key === 'p') {
       togglePotsWindow(undefined, { restoreFocus: true });
+      return;
+    }
+    if (key === 's' && isPlayingTurns) {
+      e.preventDefault();
+      triggerSkipPlayback();
       return;
     }
     if (isActionLocked) return;
