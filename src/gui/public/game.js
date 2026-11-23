@@ -1117,13 +1117,15 @@
 
       const pos = opp.position || '';
       const posClass = pos ? `pos-${pos.toLowerCase()}` : '';
-      const posPill = pos ? `<span class="pos-badge pos-badge-sm ${posClass}" title="${opp.positionLabel || pos}">${pos}</span>` : '';
+      const posPill = pos
+        ? `<span class="pos-badge pos-badge-sm pots-pos-pill ${posClass}" title="${opp.positionLabel || pos}">${pos}</span>`
+        : '';
 
       rows.push(`
         <div class="pots-row ${statusClass}">
-          <span class="pots-player-name">
+          <span class="pots-player-name pots-player-cell">
             <span class="pots-status-dot ${statusClass}"></span>
-            <span>${opp.emoji} ${opp.shortName}</span>
+            <span class="pots-player-label" title="${opp.shortName}">${opp.emoji} ${opp.shortName}</span>
             ${posPill}
           </span>
           <span class="pots-val in-pot">$${inPot}</span>
@@ -1140,13 +1142,13 @@
     const playerChips =
       liveOverrides && typeof liveOverrides.playerChips === 'number' ? liveOverrides.playerChips : state.playerChips;
     const pPos = state.playerPosition || 'BTN';
-    const pPosPill = `<span class="pos-badge pos-badge-sm pos-${pPos.toLowerCase()}" title="${state.playerPositionLabel || pPos}">${pPos}</span>`;
+    const pPosPill = `<span class="pos-badge pos-badge-sm pots-pos-pill pos-${pPos.toLowerCase()}" title="${state.playerPositionLabel || pPos}">${pPos}</span>`;
 
     rows.push(`
       <div class="pots-row is-you">
-        <span class="pots-player-name">
+        <span class="pots-player-name pots-player-cell">
           <span class="pots-status-dot active"></span>
-          <span>👤 You</span>
+          <span class="pots-player-label" title="You">👤 You</span>
           ${pPosPill}
         </span>
         <span class="pots-val in-pot">$${playerInPot}</span>

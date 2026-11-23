@@ -1817,6 +1817,149 @@ test(
           { turnSpeed: 0.02 },
         );
       });
+      // TEST 15: Phone Viewports (390×844 & 360×740) Table Pots Position Badges Never Clip
+      // ----------------------------------------------------------------------
+      for (const vp of [
+        { width: 390, height: 844 },
+        { width: 360, height: 740 },
+      ]) {
+        await t.test(
+          `phone viewport (${vp.width}x${vp.height}) keeps all 5 Table Pots position badges and numeric columns completely unclipped with long opponent names`,
+          async () => {
+            await withGamePage(
+              async ({ page }) => {
+                // Seat Mei-Ling (SB), Viktor (BB), Tariq (UTG), and Reginald (CO) alongside You (BTN)
+                await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
+                await page.locator('.opponent-pick-card[data-opp-id="viktor"]').click();
+                await page.locator('.opponent-pick-card[data-opp-id="tariq"]').click();
+                await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+                await page.locator('#btn-confirm-opponents').click();
+                await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+                await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+                await waitForPromptReady(page, 'Pre-flop');
+
+                // Ensure Table Pots window is open
+                const isOpen = await page.locator('#pots-window').evaluate((el) => el.classList.contains('open'));
+                if (!isOpen) {
+                  await page.locator('#pots-toggle-btn').click();
+                }
+                await page.waitForSelector('#pots-window.open #pots-window-body .pots-row');
+
+                const metrics = await page.evaluate(() => {
+                  const vw = window.innerWidth;
+                  const win = document.getElementById('pots-window')!;
+                  const winRect = win.getBoundingClientRect();
+                  const rows = Array.from(document.querySelectorAll('#pots-window-body .pots-row')).map((row) => {
+                    const cell = row.querySelector('.pots-player-cell') as HTMLElement | null;
+                    const pill = row.querySelector('.pots-pos-pill') as HTMLElement | null;
+                    const label = row.querySelector('.pots-player-label') as HTMLElement | null;
+                    const vals = Array.from(row.querySelectorAll('.pots-val')).map((el) => {
+                      const vEl = el as HTMLElement;
+                      const r = vEl.getBoundingClientRect();
+                      return {
+                        text: vEl.textContent?.trim() || '',
+                        left: r.left,
+                        right: r.right,
+                        width: r.width,
+                        scrollWidth: vEl.scrollWidth,
+                        clientWidth: vEl.clientWidth,
+                      };
+                    });
+                    const cellRect = cell?.getBoundingClientRect();
+                    const pillRect = pill?.getBoundingClientRect();
+                    return {
+                      labelText: label?.textContent?.trim() || '',
+                      pillText: pill?.textContent?.trim() || '',
+                      cellScrollWidth: cell?.scrollWidth ?? -1,
+                      cellClientWidth: cell?.clientWidth ?? -1,
+                      pillScrollWidth: pill?.scrollWidth ?? -1,
+                      pillClientWidth: pill?.clientWidth ?? -1,
+                      cellRect: cellRect
+                        ? { left: cellRect.left, right: cellRect.right, width: cellRect.width }
+                        : null,
+                      pillRect: pillRect
+                        ? { left: pillRect.left, right: pillRect.right, width: pillRect.width }
+                        : null,
+                      vals,
+                    };
+                  });
+                  return {
+                    vw,
+                    winRect: { left: winRect.left, right: winRect.right, width: winRect.width },
+                    winScrollWidth: win.scrollWidth,
+                    winClientWidth: win.clientWidth,
+                    rows,
+                  };
+                });
+
+                assert.equal(metrics.vw, vp.width);
+                assert.ok(
+                  metrics.winRect.left >= 0 && metrics.winRect.right <= vp.width + 1,
+                  `Table Pots window clipped outside ${vp.width}px viewport: ${JSON.stringify(metrics.winRect)}`,
+                );
+                assert.ok(
+                  metrics.winScrollWidth <= metrics.winClientWidth + 1,
+                  `Table Pots window overflows horizontally: scrollWidth=${metrics.winScrollWidth}, clientWidth=${metrics.winClientWidth}`,
+                );
+                assert.equal(metrics.rows.length, 5);
+
+                const seenPositions: string[] = [];
+                for (const row of metrics.rows) {
+                  assert.ok(row.cellRect, `Missing .pots-player-cell for ${row.labelText}`);
+                  assert.ok(row.pillRect, `Missing .pots-pos-pill for ${row.labelText}`);
+                  assert.match(row.pillText, /^(BTN|SB|BB|UTG|CO)$/, `Unexpected position badge text: ${row.pillText}`);
+                  seenPositions.push(row.pillText);
+
+                  assert.ok(
+                    row.cellScrollWidth <= row.cellClientWidth + 1,
+                    `Player cell clipped for ${row.labelText} (${row.pillText}): scrollWidth=${row.cellScrollWidth}, clientWidth=${row.cellClientWidth}`,
+                  );
+                  assert.ok(
+                    row.pillScrollWidth <= row.pillClientWidth + 1,
+                    `Position badge clipped internally for ${row.labelText} (${row.pillText}): scrollWidth=${row.pillScrollWidth}, clientWidth=${row.pillClientWidth}`,
+                  );
+                  assert.ok(
+                    row.pillRect.left >= row.cellRect.left - 1 && row.pillRect.right <= row.cellRect.right + 1,
+                    `Position badge ${row.pillText} for ${row.labelText} overflows player cell: pill=${JSON.stringify(row.pillRect)}, cell=${JSON.stringify(row.cellRect)}`,
+                  );
+                  assert.ok(
+                    row.pillRect.left >= metrics.winRect.left && row.pillRect.right <= metrics.winRect.right + 1,
+                    `Position badge ${row.pillText} for ${row.labelText} overflows #pots-window: pill=${JSON.stringify(row.pillRect)}, win=${JSON.stringify(metrics.winRect)}`,
+                  );
+                  assert.ok(
+                    row.pillRect.width >= 22,
+                    `Position badge ${row.pillText} for ${row.labelText} too narrow/clipped: width=${row.pillRect.width}`,
+                  );
+
+                  assert.equal(row.vals.length, 3, `Expected 3 numeric columns for ${row.labelText}`);
+                  let prevRight = row.cellRect.right;
+                  for (const val of row.vals) {
+                    assert.ok(
+                      val.left >= prevRight - 1,
+                      `Numeric column ${val.text} overlaps previous column in row ${row.labelText}: left=${val.left}, prevRight=${prevRight}`,
+                    );
+                    assert.ok(
+                      val.right <= metrics.winRect.right + 1,
+                      `Numeric column ${val.text} clips outside #pots-window in row ${row.labelText}: right=${val.right}, winRight=${metrics.winRect.right}`,
+                    );
+                    assert.ok(
+                      val.scrollWidth <= val.clientWidth + 1,
+                      `Numeric column ${val.text} overflows its own track in row ${row.labelText}: scrollWidth=${val.scrollWidth}, clientWidth=${val.clientWidth}`,
+                    );
+                    prevRight = val.right;
+                  }
+                }
+                assert.deepEqual([...seenPositions].sort(), ['BB', 'BTN', 'CO', 'SB', 'UTG']);
+              },
+              {
+                turnSpeed: 0.02,
+                viewport: vp,
+                engineOptions: { random: () => 0.5 },
+              },
+            );
+          },
+        );
+      }
     } finally {
       await browser.close();
     }

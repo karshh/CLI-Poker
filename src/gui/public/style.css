@@ -259,7 +259,7 @@ html, body {
   position: absolute;
   top: 12px;
   left: 16px;
-  width: 308px;
+  width: 332px;
   background: rgba(12, 16, 26, 0.93);
   border: 1.5px solid rgba(212, 175, 55, 0.6);
   border-radius: 10px;
@@ -320,7 +320,8 @@ html, body {
 
 .pots-window-cols {
   display: grid;
-  grid-template-columns: 1.35fr 0.75fr 0.75fr 0.8fr;
+  grid-template-columns: minmax(0, 1.75fr) minmax(44px, 0.65fr) minmax(44px, 0.65fr) minmax(48px, 0.7fr);
+  column-gap: 6px;
   padding: 5px 10px;
   font-size: 9px;
   font-weight: 700;
@@ -328,6 +329,9 @@ html, body {
   text-transform: uppercase;
   color: #9ca3af;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pots-window-cols span {
+  white-space: nowrap;
 }
 .pots-window-cols span:not(:first-child) {
   text-align: right;
@@ -341,7 +345,8 @@ html, body {
 
 .pots-row {
   display: grid;
-  grid-template-columns: 1.35fr 0.75fr 0.75fr 0.8fr;
+  grid-template-columns: minmax(0, 1.75fr) minmax(44px, 0.65fr) minmax(44px, 0.65fr) minmax(48px, 0.7fr);
+  column-gap: 6px;
   align-items: center;
   padding: 5px 10px;
   font-size: 11px;
@@ -363,15 +368,31 @@ html, body {
   opacity: 0.5;
 }
 
-.pots-player-name {
+.pots-player-name,
+.pots-player-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  min-width: 0;
   color: #f3f4f6;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
+}
+.pots-player-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pots-pos-pill {
+  flex-shrink: 0;
+  min-width: 24px;
+  margin-left: 0;
+  padding: 1px 5px;
+  font-size: 8.5px;
+  line-height: 1.25;
+  white-space: nowrap;
 }
 .pots-status-dot {
   width: 6px;
@@ -387,6 +408,7 @@ html, body {
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  white-space: nowrap;
 }
 .pots-val.in-pot { color: #fde68a; }
 .pots-val.won { color: #60a5fa; }
@@ -1829,9 +1851,9 @@ html, body {
     height: 92px;
   }
   .pots-window {
-    left: 10px;
+    left: 8px;
     top: 8px;
-    width: min(260px, calc(100vw - 20px));
+    width: min(350px, calc(100vw - 16px));
   }
   .dialogue-panel {
     flex-direction: column;
@@ -1995,6 +2017,6 @@ html, body {
   .pots-window {
     top: 4px;
     left: 8px;
-    width: 220px;
+    width: min(296px, calc(100vw - 16px));
   }
 }
