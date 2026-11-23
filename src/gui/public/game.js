@@ -9,10 +9,30 @@
   // =========================================================================
   // AUDIO SYNTHESIZER (Web Audio API - Procedural Casino Sounds)
   // =========================================================================
+  const MUTE_STORAGE_KEY = 'high_roller_muted';
+
+  function readSavedMutePreference() {
+    try {
+      return window.localStorage.getItem(MUTE_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  function writeSavedMutePreference(muted) {
+    try {
+      window.localStorage.setItem(MUTE_STORAGE_KEY, String(Boolean(muted)));
+    } catch {
+      // Ignore blocked storage
+    }
+  }
+
   class SoundFX {
     constructor() {
       this.ctx = null;
-      this.enabled = true;
+      this.muted = readSavedMutePreference();
+      this.enabled = !this.muted;
+      this.playedCount = 0;
     }
 
     init() {
@@ -27,13 +47,22 @@
       }
     }
 
-    toggle() {
-      this.enabled = !this.enabled;
+    setMuted(muted) {
+      this.muted = Boolean(muted);
+      this.enabled = !this.muted;
+      writeSavedMutePreference(this.muted);
+      syncSoundToggleUI(this.muted);
       return this.enabled;
     }
 
+    toggle() {
+      return this.setMuted(!this.muted);
+    }
+
     playCardDeal() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       const bufferSize = this.ctx.sampleRate * 0.12;
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
@@ -61,7 +90,9 @@
     }
 
     playCardFlip() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -79,7 +110,9 @@
     }
 
     playChipSound() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       [2400, 3100].forEach((freq, idx) => {
         const osc = this.ctx.createOscillator();
@@ -98,7 +131,9 @@
     }
 
     playKnock() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       [0, 0.09].forEach((delayMs) => {
         const osc = this.ctx.createOscillator();
@@ -118,7 +153,9 @@
     }
 
     playWin() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       const notes = [523.25, 659.25, 783.99, 1046.5];
       notes.forEach((freq, idx) => {
@@ -138,7 +175,9 @@
     }
 
     playDefeat() {
-      if (!this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.playedCount += 1;
+      if (!this.ctx) return;
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -899,6 +938,7 @@
   // CLIENT CONTROLLER
   // =========================================================================
   const sfx = new SoundFX();
+  window.__POKER_SFX__ = sfx;
   let currentState = null;
   let activeHotkeys = {};
   let isActionLocked = false;
@@ -985,6 +1025,21 @@
   const elDrawerClose = document.getElementById('drawer-close');
   const elDrawerContent = document.getElementById('drawer-content');
 
+  function syncSoundToggleUI(muted) {
+    const isMuted = Boolean(muted);
+    if (elSoundIcon) {
+      elSoundIcon.textContent = isMuted ? '🔇' : '🔊';
+    }
+    if (elSoundToggle) {
+      const tooltip = isMuted ? 'Unmute Sound (M)' : 'Mute Sound (M)';
+      elSoundToggle.setAttribute('aria-pressed', String(isMuted));
+      elSoundToggle.setAttribute('aria-label', 'Mute Sound (M)');
+      elSoundToggle.setAttribute('title', tooltip);
+      elSoundToggle.classList.toggle('is-muted', isMuted);
+    }
+  }
+  syncSoundToggleUI(sfx.muted);
+
   // Initialize Audio on First User Interaction
   function ensureAudio() {
     sfx.init();
@@ -995,8 +1050,7 @@
   // Sound Toggle Handler
   elSoundToggle.addEventListener('click', () => {
     ensureAudio();
-    const active = sfx.toggle();
-    elSoundIcon.textContent = active ? '🔊' : '🔇';
+    sfx.toggle();
   });
 
   function syncPanelAccessibility(panel, toggleBtn, isOpen) {
@@ -2076,8 +2130,7 @@
     const dialogOpen = Boolean(elOppModalOverlay && elOppModalOverlay.open);
 
     if (key === 'm') {
-      const active = sfx.toggle();
-      elSoundIcon.textContent = active ? '🔊' : '🔇';
+      sfx.toggle();
       return;
     }
 

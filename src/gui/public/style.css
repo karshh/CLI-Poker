@@ -604,6 +604,11 @@ html, body {
   border-color: var(--gold-primary);
   transform: scale(1.08);
 }
+.icon-btn.is-muted {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(248, 113, 113, 0.75);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+}
 
 /* ==========================================================================
    3D POV VIEWPORT (FIRST-PERSON TABLE PERSPECTIVE)

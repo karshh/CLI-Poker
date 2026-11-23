@@ -2223,6 +2223,167 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 15: Mute Preference Persistence Across Page Reload (Issue #11)
+      // ----------------------------------------------------------------------
+      await t.test('mute preference via button and M hotkey persists in localStorage across reload and suppresses initial load audio', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            // 1. Default unmuted state on fresh load
+            const initialSoundState = await page.evaluate(() => {
+              const btn = document.getElementById('sound-toggle')!;
+              const icon = document.getElementById('sound-icon')!;
+              const sfx = (window as unknown as { __POKER_SFX__: { muted: boolean; enabled: boolean; playedCount: number } }).__POKER_SFX__;
+              return {
+                icon: icon.textContent?.trim(),
+                ariaPressed: btn.getAttribute('aria-pressed'),
+                ariaLabel: btn.getAttribute('aria-label'),
+                title: btn.getAttribute('title'),
+                hasMutedClass: btn.classList.contains('is-muted'),
+                savedPref: window.localStorage.getItem('high_roller_muted'),
+                muted: sfx.muted,
+                enabled: sfx.enabled,
+                playedCount: sfx.playedCount,
+              };
+            });
+            assert.equal(initialSoundState.icon, '🔊');
+            assert.equal(initialSoundState.ariaPressed, 'false');
+            assert.equal(initialSoundState.ariaLabel, 'Mute Sound (M)');
+            assert.equal(initialSoundState.title, 'Mute Sound (M)');
+            assert.equal(initialSoundState.hasMutedClass, false);
+            assert.equal(initialSoundState.muted, false);
+            assert.equal(initialSoundState.enabled, true);
+            assert.ok(initialSoundState.playedCount >= 1, 'Initial unmuted boot should record initial card deal sound');
+
+            // 2. Complete a hand so the table has a restored hand & result on reload
+            for (const id of ['reginald', 'buck', 'elon', 'tony']) {
+              await page.locator(`.opponent-pick-card[data-opp-id="${id}"]`).click();
+            }
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            // 3. Mute after the hand by clicking #sound-toggle
+            await page.locator('#sound-toggle').click();
+            const afterClickMute = await page.evaluate(() => {
+              const btn = document.getElementById('sound-toggle')!;
+              const icon = document.getElementById('sound-icon')!;
+              const sfx = (window as unknown as { __POKER_SFX__: { muted: boolean; enabled: boolean } }).__POKER_SFX__;
+              return {
+                icon: icon.textContent?.trim(),
+                ariaPressed: btn.getAttribute('aria-pressed'),
+                ariaLabel: btn.getAttribute('aria-label'),
+                title: btn.getAttribute('title'),
+                hasMutedClass: btn.classList.contains('is-muted'),
+                savedPref: window.localStorage.getItem('high_roller_muted'),
+                muted: sfx.muted,
+                enabled: sfx.enabled,
+              };
+            });
+            assert.equal(afterClickMute.icon, '🔇');
+            assert.equal(afterClickMute.ariaPressed, 'true');
+            assert.equal(afterClickMute.ariaLabel, 'Mute Sound (M)');
+            assert.equal(afterClickMute.title, 'Unmute Sound (M)');
+            assert.equal(afterClickMute.hasMutedClass, true);
+            assert.equal(afterClickMute.savedPref, 'true');
+            assert.equal(afterClickMute.muted, true);
+            assert.equal(afterClickMute.enabled, false);
+
+            // 4. Reload the tab while muted -> must apply BEFORE fetchInitialState() and remain muted after load with 0 sounds played!
+            await page.reload({ waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const afterMutedReload = await page.evaluate(() => {
+              const btn = document.getElementById('sound-toggle')!;
+              const icon = document.getElementById('sound-icon')!;
+              const sfx = (window as unknown as { __POKER_SFX__: { muted: boolean; enabled: boolean; playedCount: number } }).__POKER_SFX__;
+              const statusText = document.getElementById('hud-street-status')?.textContent?.trim() || '';
+              return {
+                icon: icon.textContent?.trim(),
+                ariaPressed: btn.getAttribute('aria-pressed'),
+                ariaLabel: btn.getAttribute('aria-label'),
+                title: btn.getAttribute('title'),
+                hasMutedClass: btn.classList.contains('is-muted'),
+                savedPref: window.localStorage.getItem('high_roller_muted'),
+                muted: sfx.muted,
+                enabled: sfx.enabled,
+                playedCount: sfx.playedCount,
+                statusText,
+              };
+            });
+            assert.equal(afterMutedReload.icon, '🔇');
+            assert.equal(afterMutedReload.ariaPressed, 'true');
+            assert.equal(afterMutedReload.ariaLabel, 'Mute Sound (M)');
+            assert.equal(afterMutedReload.title, 'Unmute Sound (M)');
+            assert.equal(afterMutedReload.hasMutedClass, true);
+            assert.equal(afterMutedReload.savedPref, 'true');
+            assert.equal(afterMutedReload.muted, true);
+            assert.equal(afterMutedReload.enabled, false);
+            assert.equal(afterMutedReload.playedCount, 0, 'Reloading while muted must play zero sounds during fetchInitialState');
+            assert.ok(afterMutedReload.statusText.startsWith('Result:'), 'Completed hand result must return after reload');
+
+            // 5. Press 'M' hotkey to unmute -> updates UI and saves 'false' in localStorage, and persists across reload
+            await page.keyboard.press('m');
+            const afterHotkeyUnmute = await page.evaluate(() => {
+              const btn = document.getElementById('sound-toggle')!;
+              const icon = document.getElementById('sound-icon')!;
+              return {
+                icon: icon.textContent?.trim(),
+                ariaPressed: btn.getAttribute('aria-pressed'),
+                ariaLabel: btn.getAttribute('aria-label'),
+                title: btn.getAttribute('title'),
+                hasMutedClass: btn.classList.contains('is-muted'),
+                savedPref: window.localStorage.getItem('high_roller_muted'),
+              };
+            });
+            assert.equal(afterHotkeyUnmute.icon, '🔊');
+            assert.equal(afterHotkeyUnmute.ariaPressed, 'false');
+            assert.equal(afterHotkeyUnmute.ariaLabel, 'Mute Sound (M)');
+            assert.equal(afterHotkeyUnmute.title, 'Mute Sound (M)');
+            assert.equal(afterHotkeyUnmute.hasMutedClass, false);
+            assert.equal(afterHotkeyUnmute.savedPref, 'false');
+
+            // Press 'M' hotkey to mute again, reload, then unmute and reload to verify both directions
+            await page.keyboard.press('m');
+            assert.equal(await page.evaluate(() => window.localStorage.getItem('high_roller_muted')), 'true');
+            await page.keyboard.press('m');
+            assert.equal(await page.evaluate(() => window.localStorage.getItem('high_roller_muted')), 'false');
+
+            await page.reload({ waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const afterUnmutedReload = await page.evaluate(() => {
+              const btn = document.getElementById('sound-toggle')!;
+              const icon = document.getElementById('sound-icon')!;
+              const sfx = (window as unknown as { __POKER_SFX__: { muted: boolean; enabled: boolean; playedCount: number } }).__POKER_SFX__;
+              return {
+                icon: icon.textContent?.trim(),
+                ariaPressed: btn.getAttribute('aria-pressed'),
+                ariaLabel: btn.getAttribute('aria-label'),
+                title: btn.getAttribute('title'),
+                hasMutedClass: btn.classList.contains('is-muted'),
+                savedPref: window.localStorage.getItem('high_roller_muted'),
+                muted: sfx.muted,
+                enabled: sfx.enabled,
+                playedCount: sfx.playedCount,
+              };
+            });
+            assert.equal(afterUnmutedReload.icon, '🔊');
+            assert.equal(afterUnmutedReload.ariaPressed, 'false');
+            assert.equal(afterUnmutedReload.ariaLabel, 'Mute Sound (M)');
+            assert.equal(afterUnmutedReload.title, 'Mute Sound (M)');
+            assert.equal(afterUnmutedReload.hasMutedClass, false);
+            assert.equal(afterUnmutedReload.savedPref, 'false');
+            assert.equal(afterUnmutedReload.muted, false);
+            assert.equal(afterUnmutedReload.enabled, true);
+            assert.ok(afterUnmutedReload.playedCount >= 1, 'Reloading while unmuted must play initial load audio');
+          },
+          { turnSpeed: 0.02 },
+        );
+      });
     } finally {
       await browser.close();
     }
