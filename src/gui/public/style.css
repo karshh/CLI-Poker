@@ -1837,6 +1837,22 @@ html, body {
   box-shadow: 0 0 14px rgba(220, 38, 38, 0.6);
 }
 
+.game-btn.btn-skip-playback {
+  background: linear-gradient(to bottom, #d97706, #b45309);
+  color: #fffbeb;
+  border-color: #fbbf24;
+  padding: 6px 14px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.game-btn.btn-skip-playback:hover {
+  background: linear-gradient(to bottom, #f59e0b, #d97706);
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.6);
+}
+.game-btn.btn-skip-playback[hidden] {
+  display: none !important;
+}
+
 .hotkey-pill {
   padding: 1px 5px;
   background: rgba(0, 0, 0, 0.35);
@@ -2043,15 +2059,13 @@ html, body {
   }
 }
 
-/* Short viewports (e.g. 844x390 / 932x430 phone landscape): clear wall sign & compact ceiling glow */
+/* Short viewports (e.g. 844x390 / 932x430 phone landscape): clear wall sign & ceiling chandelier */
 @media (max-height: 600px) {
   .casino-painting {
     display: none;
   }
   .chandelier {
-    transform: translateX(-50%) scale(0.6);
-    transform-origin: top center;
-    opacity: 0.55;
+    display: none;
   }
 }
 

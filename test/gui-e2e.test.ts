@@ -2561,6 +2561,348 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 15: Playback Speed Toggle (1x -> 2x -> 4x -> 1x, localStorage Persistence) & Skip Playback Control
+      // ----------------------------------------------------------------------
+      await t.test('playback speed toggle defaults to 1x, cycles 1x -> 2x -> 4x -> 1x with localStorage persistence, and 2x/4x + Skip Playback preserve clockwise order, folded card reveals, and final state', async () => {
+        const turnRngQueue: number[] = [];
+        const makePlaybackTestDeck = () => {
+          const cards = [
+            new Card('♠', 'A'), new Card('♥', 'A'), // Player (BTN)
+            new Card('♦', 'J'), new Card('♥', '8'), // Seat 1: Reginald (SB)
+            new Card('♠', 'K'), new Card('♥', 'K'), // Seat 2: Buck (BB)
+            new Card('♣', '2'), new Card('♦', '5'), // Seat 3: Elon (UTG -> folds on hard mode)
+            new Card('♦', '10'), new Card('♠', '9'), // Seat 4: Tony (CO)
+            new Card('♣', '3'), new Card('♦', '6'), new Card('♠', '9'), // Flop
+            new Card('♣', 'Q'), // Turn
+            new Card('♥', '4'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page, baseUrl }) => {
+            const speedBtn = page.locator('#speed-toggle-btn');
+            // 1. Fresh load without ?turnSpeed= defaults to 1x
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '1x');
+
+            // Seat reginald, buck, elon, tony so the native modal dialog closes and top-nav buttons are interactive
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+
+            // 2. Clicking #speed-toggle-btn cycles 1x -> 2x -> 4x -> 1x and persists in localStorage
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 2x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '2x');
+            assert.equal(await page.evaluate(() => window.localStorage.getItem('high_roller_turn_speed')), '2x');
+
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 4x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '4x');
+            assert.equal(await page.evaluate(() => window.localStorage.getItem('high_roller_turn_speed')), '4x');
+
+            // Reload and verify 4x persists
+            await page.reload({ waitUntil: 'networkidle' });
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 4x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '4x');
+
+            // Cycle back to 1x -> then 2x -> then 4x for fast turn playback check
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 2x');
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 4x');
+
+            // 3. Verify 2x uses 0.5 (1000ms -> 500ms) and 4x uses 0.25 (1000ms -> 250ms) and 4x playback preserves clockwise decision order ['elon', 'tony', 'reginald', 'buck']
+            await page.evaluate(() => {
+              const delays: Array<{ ms: number; waitMs: number }> = [];
+              (window as unknown as { __DELAY_LOG__: typeof delays }).__DELAY_LOG__ = delays;
+              const origSetTimeout = window.setTimeout.bind(window);
+              window.setTimeout = ((fn: TimerHandler, timeout?: number, ...args: unknown[]) => {
+                if (typeof timeout === 'number' && timeout > 50) {
+                  delays.push({ ms: timeout, waitMs: timeout });
+                }
+                return origSetTimeout(fn, timeout, ...args);
+              }) as typeof window.setTimeout;
+
+              const order: string[] = [];
+              (window as unknown as { __SPEED_ORDER__: string[] }).__SPEED_ORDER__ = order;
+              const obs = new MutationObserver(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                const id = thinking?.getAttribute('data-opp-id') || '';
+                if (id && order[order.length - 1] !== id) {
+                  order.push(id);
+                }
+              });
+              obs.observe(document.querySelector('.table-scene')!, {
+                attributes: true,
+                subtree: true,
+                attributeFilter: ['class'],
+              });
+              (window as unknown as { __SPEED_OBS__: MutationObserver }).__SPEED_OBS__ = obs;
+            });
+
+            const start4x = Date.now();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            const elapsed4x = Date.now() - start4x;
+
+            const { order4x, delays4x } = await page.evaluate(() => {
+              (window as unknown as { __SPEED_OBS__: MutationObserver }).__SPEED_OBS__.disconnect();
+              return {
+                order4x: (window as unknown as { __SPEED_ORDER__: string[] }).__SPEED_ORDER__,
+                delays4x: (window as unknown as { __DELAY_LOG__: Array<{ ms: number; waitMs: number }> }).__DELAY_LOG__,
+              };
+            });
+
+            // At 4x (0.25 multiplier): 350ms -> 88ms, 450ms -> 113ms, 650ms -> 163ms, 1100..1900ms -> 275..475ms
+            assert.ok(delays4x.some((d) => d.waitMs === Math.round(350 * 0.25)), 'Expected 4x multiplier (0.25) on 350ms delay -> 88ms');
+            assert.ok(delays4x.some((d) => d.waitMs === Math.round(650 * 0.25)), 'Expected 4x multiplier (0.25) on 650ms delay -> 163ms');
+            // Pre-flop UTG (elon) -> CO (tony), then after Call: SB (reginald) -> BB (buck), then Flop SB..CO
+            assert.deepEqual(order4x.slice(0, 4), ['elon', 'tony', 'reginald', 'buck']);
+            assert.ok(elapsed4x < 6500, `Expected 4x playback across Pre-flop + Flop to finish under 6500ms, took ${elapsed4x}ms`);
+            assert.equal((await page.locator('#street-banner').textContent())?.trim(), 'FLOP');
+            assert.equal(await page.locator('#community-cards-container .card').count(), 3);
+            assert.equal((await page.locator('#pot-amount').textContent())?.trim(), '$50');
+
+            // 4. Switch to 1x speed with sound enabled (🔊) and verify clicking #skip-playback-btn during playback fast-forwards remaining turns in order AND suppresses transient oscillator starts for skipped events
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
+            assert.equal((await page.locator('#sound-icon').textContent())?.trim(), '🔊');
+
+            await page.evaluate(() => {
+              let oscStartCount = 0;
+              (window as unknown as { __OSC_STARTS__: () => number; __RESET_OSC_STARTS__: () => void }).__OSC_STARTS__ =
+                () => oscStartCount;
+              (
+                window as unknown as { __OSC_STARTS__: () => number; __RESET_OSC_STARTS__: () => void }
+              ).__RESET_OSC_STARTS__ = () => {
+                oscStartCount = 0;
+              };
+              const origStart = OscillatorNode.prototype.start;
+              if (!(OscillatorNode.prototype as unknown as { __hooked__?: boolean }).__hooked__) {
+                (OscillatorNode.prototype as unknown as { __hooked__?: boolean }).__hooked__ = true;
+                OscillatorNode.prototype.start = function (...args: [number?]) {
+                  oscStartCount += 1;
+                  return origStart.apply(this, args);
+                };
+              }
+
+              const decisionBadges: Array<{ id: string; badge: string }> = [];
+              (window as unknown as { __SKIP_DECISIONS__: typeof decisionBadges }).__SKIP_DECISIONS__ = decisionBadges;
+              const obs = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                  const target = m.target as HTMLElement;
+                  if (target && target.id && target.id.startsWith('opp-action-')) {
+                    const id = target.id.replace('opp-action-', '');
+                    const txt = target.textContent?.trim() || '';
+                    if (txt && txt !== 'Thinking...') {
+                      if (
+                        decisionBadges.length === 0 ||
+                        decisionBadges[decisionBadges.length - 1]!.id !== id ||
+                        decisionBadges[decisionBadges.length - 1]!.badge !== txt
+                      ) {
+                        decisionBadges.push({ id, badge: txt });
+                      }
+                    }
+                  }
+                }
+              });
+              obs.observe(document.querySelector('.table-scene')!, {
+                childList: true,
+                characterData: true,
+                subtree: true,
+              });
+              (window as unknown as { __SKIP_OBS__: MutationObserver }).__SKIP_OBS__ = obs;
+            });
+
+            // Bet $20 on Flop -> queues all 4 opponents clockwise ['reginald', 'buck', 'elon', 'tony'] and deals Turn
+            const skipStart = Date.now();
+            await page.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+            const skipBtn = page.locator('#skip-playback-btn');
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            // Reset oscillator start counter immediately before clicking Skip Playback
+            await page.evaluate(() => {
+              (window as unknown as { __RESET_OSC_STARTS__: () => void }).__RESET_OSC_STARTS__();
+            });
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Turn');
+            const skipElapsed = Date.now() - skipStart;
+
+            const { skipDecisions, oscStartsDuringFlopSkip } = await page.evaluate(() => {
+              (window as unknown as { __SKIP_OBS__: MutationObserver }).__SKIP_OBS__.disconnect();
+              return {
+                skipDecisions: (window as unknown as { __SKIP_DECISIONS__: Array<{ id: string; badge: string }> })
+                  .__SKIP_DECISIONS__,
+                oscStartsDuringFlopSkip: (window as unknown as { __OSC_STARTS__: () => number }).__OSC_STARTS__(),
+              };
+            });
+
+            assert.ok(skipElapsed < 1500, `Expected clicking Skip Playback to complete remaining turns in <1500ms, took ${skipElapsed}ms`);
+            assert.equal(
+              oscStartsDuringFlopSkip,
+              0,
+              `Expected zero transient oscillator starts for skipped events after clicking Skip Playback on Flop, got ${oscStartsDuringFlopSkip}`,
+            );
+            assert.equal(await skipBtn.isHidden(), true, 'Skip Playback button must hide once player prompt is ready');
+            // Calling Flop bet in clockwise order ['reginald', 'buck', 'elon', 'tony'] followed by Turn checks ['reginald', 'buck', 'elon', 'tony']
+            assert.deepEqual(
+              skipDecisions.slice(0, 4).map((d) => d.id),
+              ['reginald', 'buck', 'elon', 'tony'],
+            );
+            assert.equal((await page.locator('#street-banner').textContent())?.trim(), 'TURN');
+            assert.equal(await page.locator('#community-cards-container .card').count(), 4);
+            assert.equal((await page.locator('#pot-amount').textContent())?.trim(), '$150');
+
+            // 5. Bet $30 on Turn, focus #sound-toggle (another control), and press 's' hotkey during playback while Reginald folds -> leaves focus on #sound-toggle and reveals Reginald's folded cards immediately with zero oscillator starts
+            turnRngQueue.push(0.05);
+            await page.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await page.locator('#sound-toggle').focus();
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'sound-toggle');
+            await page.evaluate(() => {
+              (window as unknown as { __RESET_OSC_STARTS__: () => void }).__RESET_OSC_STARTS__();
+            });
+            await page.keyboard.press('s');
+            await waitForPromptReady(page, 'River');
+            assert.equal(
+              await page.evaluate(() => document.activeElement?.id),
+              'sound-toggle',
+              'Pressing S shortcut from another focused control must leave focus where it was',
+            );
+            const oscStartsDuringTurnSkip = await page.evaluate(() =>
+              (window as unknown as { __OSC_STARTS__: () => number }).__OSC_STARTS__(),
+            );
+            assert.equal(
+              oscStartsDuringTurnSkip,
+              0,
+              `Expected zero transient oscillator starts during Turn hotkey Skip Playback, got ${oscStartsDuringTurnSkip}`,
+            );
+            assert.equal((await page.locator('#street-banner').textContent())?.trim(), 'RIVER');
+            assert.equal(await page.locator('#community-cards-container .card').count(), 5);
+            assert.equal(
+              await page.locator('#opp-cards-container-reginald .card:not(.card-back)').count(),
+              2,
+              'Folded opponent cards must be revealed face-up even when Skip Playback fast-forwards',
+            );
+
+            // 6. Finish Hand #1, start Hand #2 at 1x with sound enabled, call pre-flop at a 5-seat table, focus #skip-playback-btn and press Enter -> moves focus to the first enabled Flop action button with zero transient oscillator starts
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await skipBtn.focus();
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'skip-playback-btn');
+            await page.evaluate(() => {
+              (window as unknown as { __RESET_OSC_STARTS__: () => void }).__RESET_OSC_STARTS__();
+            });
+            await page.keyboard.press('Enter');
+            await waitForPromptReady(page, 'Flop');
+            const focusAfterEnterSkip = await page.evaluate(() => {
+              const active = document.activeElement as HTMLElement | null;
+              const firstEnabledAction = document.querySelector(
+                '#action-buttons-group button:not(:disabled)',
+              ) as HTMLElement | null;
+              return {
+                matchesFirstAction: Boolean(active && active === firstEnabledAction),
+                choiceId: active?.getAttribute('data-choice-id') || '',
+              };
+            });
+            assert.equal(
+              focusAfterEnterSkip.matchesFirstAction,
+              true,
+              'Activating focused Skip Playback button via Enter must move focus to the first enabled action button when Skip hides',
+            );
+            assert.equal(focusAfterEnterSkip.choiceId, 'check');
+            const oscStartsPreFlopCallSkip = await page.evaluate(() =>
+              (window as unknown as { __OSC_STARTS__: () => number }).__OSC_STARTS__(),
+            );
+            assert.equal(
+              oscStartsPreFlopCallSkip,
+              0,
+              `Expected zero transient oscillator starts when skipping after calling Pre-flop at 1x with sound enabled, got ${oscStartsPreFlopCallSkip}`,
+            );
+            assert.equal((await page.locator('#street-banner').textContent())?.trim(), 'FLOP');
+            assert.equal(await page.locator('#community-cards-container .card').count(), 3);
+
+            // 7. Opening with ?turnSpeed=4x displays the effective 4x speed on #speed-toggle-btn, and cycling the speed button to 2x replaces the URL override so the initial 350ms playback delay schedules at 175ms (2x) rather than 88ms (4x)
+            await page.goto(`${baseUrl}/?turnSpeed=4x`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Flop');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 4x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '4x');
+
+            // Cycle 4x -> 1x -> 2x
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '1x');
+            await speedBtn.click();
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 2x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), '2x');
+
+            await page.evaluate(() => {
+              const scheduled: number[] = [];
+              (window as unknown as { __OVERRIDE_DELAYS__: number[] }).__OVERRIDE_DELAYS__ = scheduled;
+              const origSetTimeout = window.setTimeout.bind(window);
+              window.setTimeout = ((fn: TimerHandler, timeout?: number, ...args: unknown[]) => {
+                if (typeof timeout === 'number' && timeout > 50) {
+                  scheduled.push(timeout);
+                }
+                return origSetTimeout(fn, timeout, ...args);
+              }) as typeof window.setTimeout;
+            });
+
+            // On Hand #2 Player is CO, so checking on Flop triggers BTN (reginald) to act and schedules the initial 350ms delay at 2x (175ms)
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Turn');
+            const overrideDelays = await page.evaluate(
+              () => (window as unknown as { __OVERRIDE_DELAYS__: number[] }).__OVERRIDE_DELAYS__,
+            );
+            assert.ok(
+              overrideDelays.includes(175),
+              `Expected cycling from ?turnSpeed=4x to 2x to schedule the 350ms delay at 175ms (2x), got: ${JSON.stringify(overrideDelays)}`,
+            );
+            assert.equal(
+              overrideDelays.includes(88),
+              false,
+              `Expected 4x delay (88ms) to be replaced once user selects 2x, got: ${JSON.stringify(overrideDelays)}`,
+            );
+
+            // 8. Custom numeric delay multipliers display their reciprocal playback speed (0.75 -> 1.33x) and 0 displays Instant
+            await page.goto(`${baseUrl}/?turnSpeed=0.75`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Turn');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1.33x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), 'custom');
+
+            await page.goto(`${baseUrl}/?turnSpeed=0`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Turn');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: Instant');
+            assert.equal(await speedBtn.getAttribute('data-speed'), 'instant');
+          },
+          {
+            // No turnSpeed option here so we test the real default 1x and header speed toggle!
+            engineOptions: {
+              initialButtonSeatIndex: 0,
+              random: () => (turnRngQueue.length > 0 ? turnRngQueue.shift()! : 0.5),
+              deckFactory: makePlaybackTestDeck,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }
