@@ -1170,6 +1170,15 @@
   }
 
   // Playback Speed Toggle Handler (1x -> 2x -> 4x -> 1x)
+  function formatPlaybackSpeedFromMultiplier(multiplier) {
+    if (multiplier <= 0) {
+      return '⚡ Speed: Instant';
+    }
+    const playbackSpeed = 1 / multiplier;
+    const rounded = Number(playbackSpeed.toFixed(2));
+    return `⚡ Speed: ${rounded}x`;
+  }
+
   function updateSpeedToggleUI() {
     if (!elSpeedToggleBtn) return;
     if (queryTurnSpeedOverride !== null) {
@@ -1180,8 +1189,8 @@
         elSpeedToggleBtn.classList.toggle('active', matched.id !== '1x');
         return;
       }
-      elSpeedToggleBtn.textContent = `⚡ Speed: Custom (${queryTurnSpeedOverride}x)`;
-      elSpeedToggleBtn.dataset.speed = 'custom';
+      elSpeedToggleBtn.textContent = formatPlaybackSpeedFromMultiplier(queryTurnSpeedOverride);
+      elSpeedToggleBtn.dataset.speed = queryTurnSpeedOverride <= 0 ? 'instant' : 'custom';
       elSpeedToggleBtn.classList.add('active');
       return;
     }

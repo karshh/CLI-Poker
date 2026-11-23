@@ -2881,6 +2881,17 @@ test(
               false,
               `Expected 4x delay (88ms) to be replaced once user selects 2x, got: ${JSON.stringify(overrideDelays)}`,
             );
+
+            // 8. Custom numeric delay multipliers display their reciprocal playback speed (0.75 -> 1.33x) and 0 displays Instant
+            await page.goto(`${baseUrl}/?turnSpeed=0.75`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Turn');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: 1.33x');
+            assert.equal(await speedBtn.getAttribute('data-speed'), 'custom');
+
+            await page.goto(`${baseUrl}/?turnSpeed=0`, { waitUntil: 'networkidle' });
+            await waitForPromptReady(page, 'Turn');
+            assert.equal((await speedBtn.textContent())?.trim(), '⚡ Speed: Instant');
+            assert.equal(await speedBtn.getAttribute('data-speed'), 'instant');
           },
           {
             // No turnSpeed option here so we test the real default 1x and header speed toggle!
