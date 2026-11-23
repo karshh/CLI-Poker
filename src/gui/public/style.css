@@ -101,11 +101,11 @@ html, body {
 /* Wall Painting */
 .casino-painting {
   position: absolute;
-  top: 40px;
+  top: 28px;
   left: 50%;
   transform: translateX(-50%);
   width: 220px;
-  height: 44px;
+  height: 36px;
   border: 3px solid var(--gold-dark);
   background: #14070a;
   box-shadow: 0 4px 15px rgba(0,0,0,0.7), inset 0 0 10px rgba(212, 175, 55, 0.3);
@@ -600,6 +600,7 @@ html, body {
 
 .pov-perspective-container {
   position: relative;
+  z-index: 5;
   width: 100%;
   max-width: 1100px;
   height: 100%;
@@ -1887,6 +1888,18 @@ html, body {
     flex-wrap: wrap;
     justify-content: center;
     padding: 10px 12px;
+  }
+}
+
+/* Short viewports (e.g. 844x390 / 932x430 phone landscape): clear wall sign & compact ceiling glow */
+@media (max-height: 600px) {
+  .casino-painting {
+    display: none;
+  }
+  .chandelier {
+    transform: translateX(-50%) scale(0.6);
+    transform-origin: top center;
+    opacity: 0.55;
   }
 }
 

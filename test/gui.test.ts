@@ -1158,6 +1158,16 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.match(cssRes.body, /\.pots-window\.open\s*\{[^}]*visibility:\s*visible;/s);
   assert.match(cssRes.body, /\.history-drawer\s*\{[^}]*visibility:\s*hidden;/s);
   assert.match(cssRes.body, /\.history-drawer\.open\s*\{[^}]*visibility:\s*visible;/s);
+  assert.match(
+    cssRes.body,
+    /@media\s*\(max-height:\s*600px\)\s*\{[\s\S]*?\.casino-painting\s*\{[\s\S]*?display:\s*none;/,
+    'Short landscape media query must hide .casino-painting to prevent overlap with overhead seat UI',
+  );
+  assert.match(
+    cssRes.body,
+    /\.pov-perspective-container\s*\{[\s\S]*?z-index:\s*5;/,
+    '.pov-perspective-container must stack above .wall-bg and .ceiling decor',
+  );
 
   // 5. GET /game.js
   const jsRes = await simulateRequest(handler, { method: 'GET', url: '/game.js' });
