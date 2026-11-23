@@ -967,6 +967,16 @@
   const elSpeakerName = document.getElementById('speaker-name');
   const elHudStreetStatus = document.getElementById('hud-street-status');
   const elDialogueMainText = document.getElementById('dialogue-main-text');
+  const elSessionSummaryPanel = document.getElementById('session-summary-panel');
+  const elSummaryTotalBuyIn = document.getElementById('summary-total-buyin');
+  const elSummaryHandsPlayed = document.getElementById('summary-hands-played');
+  const elSummaryHandsWon = document.getElementById('summary-hands-won');
+  const elSummaryFinalStack = document.getElementById('summary-final-stack');
+  const elSummaryStartingStack = document.getElementById('summary-starting-stack');
+  const elSummaryRebuys = document.getElementById('summary-rebuys');
+  const elSummaryRebuysSub = document.getElementById('summary-rebuys-sub');
+  const elSummaryNetProfit = document.getElementById('summary-net-profit');
+  const elSummaryNetSub = document.getElementById('summary-net-sub');
   const elActionPromptTitle = document.getElementById('action-prompt-title');
   const elActionButtonsGroup = document.getElementById('action-buttons-group');
 
@@ -1240,6 +1250,66 @@
     `);
 
     elPotsWindowBody.innerHTML = rows.join('');
+  }
+
+  function renderSessionSummary(state) {
+    if (!elSessionSummaryPanel) return;
+    if (!state || state.stage !== 'game_over') {
+      elSessionSummaryPanel.hidden = true;
+      return;
+    }
+
+    const summary = state.sessionSummary || {
+      handsPlayed: state.handCount || 0,
+      handsWon: state.playerHandsWon || 0,
+      startingStack: 500,
+      finalStack: state.playerChips || 0,
+      rebuyCount: 0,
+      rebuyChips: 0,
+      totalBuyIn: 500,
+      netProfit: (state.playerChips || 0) - 500,
+    };
+
+    elSessionSummaryPanel.hidden = false;
+
+    if (elSummaryTotalBuyIn) {
+      elSummaryTotalBuyIn.textContent = `Total Buy-In: $${summary.totalBuyIn}`;
+    }
+    if (elSummaryHandsPlayed) {
+      elSummaryHandsPlayed.textContent = String(summary.handsPlayed);
+    }
+    if (elSummaryHandsWon) {
+      elSummaryHandsWon.textContent = `${summary.handsWon} hand${summary.handsWon === 1 ? '' : 's'} won`;
+    }
+    if (elSummaryFinalStack) {
+      elSummaryFinalStack.textContent = `$${summary.finalStack}`;
+    }
+    if (elSummaryStartingStack) {
+      elSummaryStartingStack.textContent = `Started at $${summary.startingStack}`;
+    }
+    if (elSummaryRebuys) {
+      elSummaryRebuys.textContent = `${summary.rebuyCount} ($${summary.rebuyChips})`;
+    }
+    if (elSummaryRebuysSub) {
+      elSummaryRebuysSub.textContent =
+        summary.rebuyCount > 0
+          ? `${summary.rebuyCount} house rebuy${summary.rebuyCount === 1 ? '' : 's'} (+$${summary.rebuyChips})`
+          : 'No rebuys taken';
+    }
+    if (elSummaryNetProfit) {
+      const net = summary.netProfit;
+      const netFormatted = net > 0 ? `+$${net}` : net < 0 ? `-$${Math.abs(net)}` : '$0';
+      elSummaryNetProfit.textContent = netFormatted;
+      elSummaryNetProfit.className = `summary-stat-value ${
+        net > 0 ? 'net-positive' : net < 0 ? 'net-negative' : 'net-even'
+      }`;
+    }
+    if (elSummaryNetSub) {
+      elSummaryNetSub.textContent =
+        summary.rebuyCount > 0
+          ? `vs $${summary.totalBuyIn} total buy-in`
+          : `vs $${summary.startingStack} starting stack`;
+    }
   }
 
   // Log Drawer Handler
@@ -1797,11 +1867,17 @@
     // Update Hidable Table Pots Window
     renderPotsWindow(state);
 
+    // Update Cash Out Session Summary Panel
+    renderSessionSummary(state);
+
     // Pot & Street
     elPotAmount.textContent = `$${state.pot}`;
     renderChipsVisual(elPotChipsVisual, state.pot);
-    elStreetBanner.textContent = state.streetName.toUpperCase();
-    if (state.outcome) {
+    elStreetBanner.textContent = state.stage === 'game_over' ? 'CASHED OUT' : state.streetName.toUpperCase();
+    if (state.stage === 'game_over') {
+      elHudStreetStatus.textContent = 'Session Complete • Cash Out Summary';
+      elHudStreetStatus.style.color = '#ffd700';
+    } else if (state.outcome) {
       if (state.outcome.result === 'win') {
         elHudStreetStatus.textContent = 'Result: You Won the Hand!';
         elHudStreetStatus.style.color = '#34d399';

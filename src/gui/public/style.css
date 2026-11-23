@@ -1630,6 +1630,86 @@ html, body {
   font-weight: 500;
 }
 
+/* Session Summary Panel (Cash Out Screen) */
+.session-summary-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: linear-gradient(135deg, rgba(16, 22, 36, 0.96), rgba(10, 14, 24, 0.96));
+  border: 1.5px solid rgba(255, 215, 0, 0.65);
+  border-radius: 10px;
+  padding: 10px 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75), inset 0 0 18px rgba(212, 175, 55, 0.12);
+}
+.session-summary-panel[hidden] {
+  display: none !important;
+}
+.session-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+  padding-bottom: 6px;
+}
+.session-summary-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: var(--gold-light);
+}
+.session-summary-buyin {
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.session-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.summary-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+.summary-stat-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #9ca3af;
+}
+.summary-stat-value {
+  font-size: 18px;
+  font-weight: 900;
+  color: #f9fafb;
+  font-variant-numeric: tabular-nums;
+}
+.summary-stat-value.net-positive {
+  color: #34d399;
+  text-shadow: 0 0 10px rgba(52, 211, 153, 0.35);
+}
+.summary-stat-value.net-negative {
+  color: #f87171;
+  text-shadow: 0 0 10px rgba(248, 113, 113, 0.35);
+}
+.summary-stat-value.net-even {
+  color: var(--gold-primary);
+}
+.summary-stat-sub {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
 /* Actions Panel (Buttons injected here) */
 .actions-panel {
   display: flex;
@@ -1866,6 +1946,13 @@ html, body {
   }
   .dialogue-text {
     font-size: 12px;
+  }
+  .session-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .summary-stat-value {
+    font-size: 15px;
   }
   .actions-panel {
     flex-direction: column;
