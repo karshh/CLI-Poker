@@ -814,6 +814,88 @@
   };
 
   // =========================================================================
+  // ACCESSIBLE CARD RENDERING HELPERS
+  // =========================================================================
+  const ACCESSIBLE_RANK_NAMES = {
+    A: 'Ace',
+    K: 'King',
+    Q: 'Queen',
+    J: 'Jack',
+  };
+
+  const ACCESSIBLE_SUIT_NAMES = {
+    '♠': 'Spades',
+    '♥': 'Hearts',
+    '♦': 'Diamonds',
+    '♣': 'Clubs',
+  };
+
+  function formatAccessibleCardName(card) {
+    if (!card || card.str === '??' || !card.value || !card.suit) {
+      return 'Face-down card';
+    }
+    const rankName = ACCESSIBLE_RANK_NAMES[card.value] || String(card.value);
+    const suitName = ACCESSIBLE_SUIT_NAMES[card.suit] || String(card.suit);
+    return `${rankName} of ${suitName}`;
+  }
+
+  function escapeHTMLAttr(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Card Suit HTML Renderer (uses sharp vector SVG for diamonds)
+  function renderSuitHTML(suit) {
+    if (suit === '♦') {
+      return '<svg class="suit-icon-svg diamond-svg" viewBox="0 0 24 28" fill="currentColor" aria-hidden="true"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg>';
+    }
+    return suit;
+  }
+
+  // Face-Down Card Back HTML Generator
+  function renderCardBackHTML() {
+    return '<div class="card card-back" role="img" aria-label="Face-down card"><div class="card-back-pattern" aria-hidden="true"></div></div>';
+  }
+
+  // Card HTML Generator
+  function renderCardHTML(cardData) {
+    if (!cardData || cardData.str === '??') {
+      return renderCardBackHTML();
+    }
+    const suitMarkup = renderSuitHTML(cardData.suit);
+    const accessibleName = escapeHTMLAttr(formatAccessibleCardName(cardData));
+    return `
+      <div class="card ${cardData.color} flipping" role="img" aria-label="${accessibleName}">
+        <div class="card-top-idx" aria-hidden="true">
+          <span class="card-val" aria-hidden="true">${cardData.value}</span>
+          <span class="card-suit" aria-hidden="true">${suitMarkup}</span>
+        </div>
+        <div class="card-center-suit" aria-hidden="true">${suitMarkup}</div>
+        <div class="card-bottom-idx" aria-hidden="true">
+          <span class="card-val" aria-hidden="true">${cardData.value}</span>
+          <span class="card-suit" aria-hidden="true">${suitMarkup}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__POKER_CARD_A11Y__ = {
+      formatAccessibleCardName,
+      renderSuitHTML,
+      renderCardBackHTML,
+      renderCardHTML,
+    };
+  }
+
+  if (typeof document === 'undefined') {
+    return;
+  }
+
+  // =========================================================================
   // CLIENT CONTROLLER
   // =========================================================================
   const sfx = new SoundFX();
@@ -1230,8 +1312,8 @@
       if (feltEl) {
         const cardsHTML = `
           <div class="opp-cards-on-table" id="opp-cards-container-${opp.id}">
-            <div class="card card-back"><div class="card-back-pattern"></div></div>
-            <div class="card card-back"><div class="card-back-pattern"></div></div>
+            ${renderCardBackHTML()}
+            ${renderCardBackHTML()}
           </div>
         `;
         const chipsHTML = `<div class="chips-stack-visual" id="opp-chips-visual-${opp.id}"></div>`;
@@ -1246,35 +1328,6 @@
 
   function findNameplateByOppId(id) {
     return document.querySelector(`.character-nameplate[data-opp-id="${id}"]`);
-  }
-
-  // Card Suit HTML Renderer (uses sharp vector SVG for diamonds)
-  function renderSuitHTML(suit) {
-    if (suit === '♦') {
-      return '<svg class="suit-icon-svg diamond-svg" viewBox="0 0 24 28" fill="currentColor" aria-hidden="true"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg>';
-    }
-    return suit;
-  }
-
-  // Card HTML Generator
-  function renderCardHTML(cardData) {
-    if (!cardData) {
-      return '<div class="card card-back"><div class="card-back-pattern"></div></div>';
-    }
-    const suitMarkup = renderSuitHTML(cardData.suit);
-    return `
-      <div class="card ${cardData.color} flipping">
-        <div class="card-top-idx">
-          <span class="card-val">${cardData.value}</span>
-          <span class="card-suit">${suitMarkup}</span>
-        </div>
-        <div class="card-center-suit">${suitMarkup}</div>
-        <div class="card-bottom-idx">
-          <span class="card-val">${cardData.value}</span>
-          <span class="card-suit">${suitMarkup}</span>
-        </div>
-      </div>
-    `;
   }
 
   // Chips Visual Renderer
@@ -1388,8 +1441,8 @@
       elCardsContainer.classList.toggle('folded', Boolean(opp.folded));
       if (opp.cardsHidden || !opp.cards || opp.cards.length < 2) {
         elCardsContainer.innerHTML = `
-          <div class="card card-back"><div class="card-back-pattern"></div></div>
-          <div class="card card-back"><div class="card-back-pattern"></div></div>
+          ${renderCardBackHTML()}
+          ${renderCardBackHTML()}
         `;
       } else {
         elCardsContainer.innerHTML = `
@@ -1584,8 +1637,8 @@
         if (elCards) {
           elCards.classList.remove('folded');
           elCards.innerHTML = `
-            <div class="card card-back"><div class="card-back-pattern"></div></div>
-            <div class="card card-back"><div class="card-back-pattern"></div></div>
+            ${renderCardBackHTML()}
+            ${renderCardBackHTML()}
           `;
         }
       });
@@ -1797,8 +1850,8 @@
       `;
     } else {
       elPlayerCardsContainer.innerHTML = `
-        <div class="card card-placeholder" id="player-card-1"></div>
-        <div class="card card-placeholder" id="player-card-2"></div>
+        <div class="card card-placeholder" id="player-card-1" aria-hidden="true"></div>
+        <div class="card card-placeholder" id="player-card-2" aria-hidden="true"></div>
       `;
     }
     if (state.playerCurrentRank) {

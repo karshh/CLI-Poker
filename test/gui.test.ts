@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import { Writable, Readable } from 'node:stream';
 import type http from 'node:http';
 import { Card } from '../src/card.js';
 import {
   ALL_OPPONENT_PROFILES,
+  cardToData,
   PokerGameEngine,
   StaleStateError,
+  type CardData,
   type SerializedGameState,
 } from '../src/gui/engine.js';
 import { createPokerRequestHandler, findPublicDir } from '../src/gui/server.js';
@@ -1307,3 +1310,66 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.ok(jsRes.body.includes('tariq'));
 });
 
+test('GUI card renderer exposes accessible rank+suit names, hides mirrored glyphs, and labels card backs', async () => {
+  const engine = new PokerGameEngine();
+  const handler = createPokerRequestHandler(engine);
+  const jsRes = await simulateRequest(handler, { method: 'GET', url: '/game.js' });
+  assert.equal(jsRes.statusCode, 200);
+
+  // Every face-down card back in game.js must route through renderCardBackHTML (no bare unlabelled card-back markup)
+  assert.equal(
+    jsRes.body.includes('<div class="card card-back"><div class="card-back-pattern"></div></div>'),
+    false,
+    'game.js must not emit bare unlabelled .card-back markup',
+  );
+
+  interface CardA11yHelpers {
+    formatAccessibleCardName: (card: CardData | null | undefined) => string;
+    renderSuitHTML: (suit: string) => string;
+    renderCardBackHTML: () => string;
+    renderCardHTML: (card: CardData | null | undefined) => string;
+  }
+
+  const sandbox: { __POKER_CARD_A11Y__?: CardA11yHelpers } = {};
+  vm.runInNewContext(jsRes.body, sandbox);
+  const helpers = sandbox.__POKER_CARD_A11Y__;
+  assert.ok(helpers, 'game.js must expose __POKER_CARD_A11Y__ helpers');
+
+  // Rank & suit accessible name mapping across all face cards, numeric cards, and all 4 suits
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♦', '10'))), '10 of Diamonds');
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♦', '4'))), '4 of Diamonds');
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♠', 'A'))), 'Ace of Spades');
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♥', 'K'))), 'King of Hearts');
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♣', 'Q'))), 'Queen of Clubs');
+  assert.equal(helpers.formatAccessibleCardName(cardToData(new Card('♦', 'J'))), 'Jack of Diamonds');
+  assert.equal(helpers.formatAccessibleCardName(null), 'Face-down card');
+  assert.equal(helpers.formatAccessibleCardName(undefined), 'Face-down card');
+  assert.equal(
+    helpers.formatAccessibleCardName({ suit: '♠', value: '2', numeric: 0, color: 'black', str: '??' }),
+    'Face-down card',
+  );
+
+  // Face-up diamond card: single accessible name on .card, mirrored indices + SVGs hidden from assistive tech
+  const tenOfDiamondsHTML = helpers.renderCardHTML(cardToData(new Card('♦', '10')));
+  assert.match(tenOfDiamondsHTML, /class="card red flipping" role="img" aria-label="10 of Diamonds"/);
+  assert.match(tenOfDiamondsHTML, /class="card-top-idx" aria-hidden="true"/);
+  assert.match(tenOfDiamondsHTML, /class="card-center-suit" aria-hidden="true"/);
+  assert.match(tenOfDiamondsHTML, /class="card-bottom-idx" aria-hidden="true"/);
+  assert.equal((tenOfDiamondsHTML.match(/class="card-val" aria-hidden="true"/g) || []).length, 2);
+  assert.equal((tenOfDiamondsHTML.match(/class="card-suit" aria-hidden="true"/g) || []).length, 2);
+  assert.equal((tenOfDiamondsHTML.match(/class="suit-icon-svg diamond-svg"[^>]*aria-hidden="true"/g) || []).length, 3);
+
+  // Face-up non-diamond card
+  const aceOfSpadesHTML = helpers.renderCardHTML(cardToData(new Card('♠', 'A')));
+  assert.match(aceOfSpadesHTML, /class="card black flipping" role="img" aria-label="Ace of Spades"/);
+
+  // Face-down card backs (direct helper, null card, and masked '??' card)
+  for (const backHTML of [
+    helpers.renderCardBackHTML(),
+    helpers.renderCardHTML(null),
+    helpers.renderCardHTML({ suit: '♠', value: '2', numeric: 0, color: 'black', str: '??' }),
+  ]) {
+    assert.match(backHTML, /class="card card-back" role="img" aria-label="Face-down card"/);
+    assert.match(backHTML, /class="card-back-pattern" aria-hidden="true"/);
+  }
+});
