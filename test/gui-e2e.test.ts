@@ -2017,6 +2017,125 @@ test(
           { turnSpeed: 0.02, engineOptions: { initialButtonSeatIndex: 3, random: () => 0.5 } },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 15: Card Accessibility Tree — Full Rank+Suit Labels (incl. Diamonds), No Mirrored Duplicates, Generic Card Backs
+      // ----------------------------------------------------------------------
+      await t.test('face-up diamond and suited cards expose single rank+suit accessible names and hidden cards expose Face-down card', async () => {
+        const deckFactory = () => {
+          const cards = [
+            new Card('♦', '10'), new Card('♦', '4'), // Player (BTN): 10 of Diamonds, 4 of Diamonds
+            new Card('♠', '4'), new Card('♣', '8'),  // Seat 1: Reginald (SB -> calls & stays active/hidden)
+            new Card('♥', '4'), new Card('♠', '8'),  // Seat 2: Buck (BB -> checks & stays active/hidden)
+            new Card('♣', '2'), new Card('♦', '5'),  // Seat 3: Elon (UTG -> folds pre-flop, revealed!)
+            new Card('♠', '2'), new Card('♥', '5'),  // Seat 4: Tony (CO -> folds pre-flop, revealed!)
+            new Card('♦', 'A'), new Card('♦', 'K'), new Card('♦', '7'), // Flop: 3 Diamond community cards
+            new Card('♣', 'Q'), // Turn
+            new Card('♥', '9'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // 1. Player's Diamond cards expose exact rank+suit accessible names (never rank-only, never mirrored duplicates)
+            const playerCardsLoc = page.locator('#player-cards-container');
+            assert.equal(await playerCardsLoc.getByRole('img', { name: '10 of Diamonds', exact: true }).count(), 1);
+            assert.equal(await playerCardsLoc.getByRole('img', { name: '4 of Diamonds', exact: true }).count(), 1);
+            const playerAria = await playerCardsLoc.ariaSnapshot();
+            assert.equal(
+              playerAria.trim(),
+              ['- img "10 of Diamonds"', '- img "4 of Diamonds"'].join('\n'),
+              `Unexpected player cards ARIA snapshot:\n${playerAria}`,
+            );
+
+            // 2. Folded opponents' revealed cards expose exact "<Rank> of <Suit>" names (covering all 4 suits)
+            const elonCardsLoc = page.locator('#opp-cards-container-elon');
+            assert.equal(await elonCardsLoc.getByRole('img', { name: '2 of Clubs', exact: true }).count(), 1);
+            assert.equal(await elonCardsLoc.getByRole('img', { name: '5 of Diamonds', exact: true }).count(), 1);
+            assert.equal(
+              (await elonCardsLoc.ariaSnapshot()).trim(),
+              ['- img "2 of Clubs"', '- img "5 of Diamonds"'].join('\n'),
+            );
+
+            const tonyCardsLoc = page.locator('#opp-cards-container-tony');
+            assert.equal(await tonyCardsLoc.getByRole('img', { name: '2 of Spades', exact: true }).count(), 1);
+            assert.equal(await tonyCardsLoc.getByRole('img', { name: '5 of Hearts', exact: true }).count(), 1);
+            assert.equal(
+              (await tonyCardsLoc.ariaSnapshot()).trim(),
+              ['- img "2 of Spades"', '- img "5 of Hearts"'].join('\n'),
+            );
+
+            // 3. Active non-folded opponents expose ONLY generic "Face-down card" labels (zero rank/suit leakage)
+            const regCardsLoc = page.locator('#opp-cards-container-reginald');
+            const buckCardsLoc = page.locator('#opp-cards-container-buck');
+            assert.equal(await regCardsLoc.getByRole('img', { name: 'Face-down card', exact: true }).count(), 2);
+            assert.equal(await buckCardsLoc.getByRole('img', { name: 'Face-down card', exact: true }).count(), 2);
+            assert.equal(await page.getByRole('img', { name: 'Face-down card', exact: true }).count(), 4);
+            const regAria = await regCardsLoc.ariaSnapshot();
+            const buckAria = await buckCardsLoc.ariaSnapshot();
+            assert.equal(regAria.trim(), ['- img "Face-down card"', '- img "Face-down card"'].join('\n'));
+            assert.equal(buckAria.trim(), ['- img "Face-down card"', '- img "Face-down card"'].join('\n'));
+
+            // 4. Advance to Flop and verify Diamond community cards expose exact single accessible names
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+
+            const boardLoc = page.locator('#community-cards-container');
+            assert.equal(await boardLoc.getByRole('img', { name: 'Ace of Diamonds', exact: true }).count(), 1);
+            assert.equal(await boardLoc.getByRole('img', { name: 'King of Diamonds', exact: true }).count(), 1);
+            assert.equal(await boardLoc.getByRole('img', { name: '7 of Diamonds', exact: true }).count(), 1);
+            const boardAria = await boardLoc.ariaSnapshot();
+            assert.ok(boardAria.includes('- img "Ace of Diamonds"'), `Missing Ace of Diamonds in board ARIA:\n${boardAria}`);
+            assert.ok(boardAria.includes('- img "King of Diamonds"'), `Missing King of Diamonds in board ARIA:\n${boardAria}`);
+            assert.ok(boardAria.includes('- img "7 of Diamonds"'), `Missing 7 of Diamonds in board ARIA:\n${boardAria}`);
+            assert.equal(
+              boardAria.includes('text: "A"') || boardAria.includes('text: "K"') || boardAria.includes('text: "7"'),
+              false,
+              `Board ARIA snapshot must not contain bare rank text nodes:\n${boardAria}`,
+            );
+
+            // Active opponents still remain labelled "Face-down card" on Flop
+            assert.equal(await page.getByRole('img', { name: 'Face-down card', exact: true }).count(), 4);
+
+            // 5. Check down through Turn & River to Showdown -> remaining opponents reveal exact accessible names
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            assert.equal(await boardLoc.getByRole('img', { name: 'Queen of Clubs', exact: true }).count(), 1);
+
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            assert.equal(await boardLoc.getByRole('img', { name: '9 of Hearts', exact: true }).count(), 1);
+
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            assert.equal(await page.getByRole('img', { name: 'Face-down card', exact: true }).count(), 0);
+            assert.equal(await regCardsLoc.getByRole('img', { name: '4 of Spades', exact: true }).count(), 1);
+            assert.equal(await regCardsLoc.getByRole('img', { name: '8 of Clubs', exact: true }).count(), 1);
+            assert.equal(await buckCardsLoc.getByRole('img', { name: '4 of Hearts', exact: true }).count(), 1);
+            assert.equal(await buckCardsLoc.getByRole('img', { name: '8 of Spades', exact: true }).count(), 1);
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialPlayerChips: 500,
+              initialOpponentChips: 500,
+              initialButtonSeatIndex: 0,
+              random: () => 0.99,
+              deckFactory,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }

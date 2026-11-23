@@ -12,9 +12,9 @@
     <!-- Top Status Bar (Strictly Above the Game Viewport) -->
     <header class="top-nav">
       <div class="brand">
-        <span class="suit-icon red"><svg class="suit-icon-svg" viewBox="0 0 24 28" fill="currentColor" style="width:13px;height:15px;display:inline-block;vertical-align:middle;"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg></span>
+        <span class="suit-icon red" aria-hidden="true"><svg class="suit-icon-svg" viewBox="0 0 24 28" fill="currentColor" aria-hidden="true" style="width:13px;height:15px;display:inline-block;vertical-align:middle;"><path d="M 12 1.5 L 21.5 14 L 12 26.5 L 2.5 14 Z"/></svg></span>
         <span class="brand-title">HIGH ROLLER HOLD'EM</span>
-        <span class="suit-icon black">♠</span>
+        <span class="suit-icon black" aria-hidden="true">♠</span>
       </div>
       <div class="stats-bar">
         <button type="button" id="pots-toggle-btn" class="nav-pill-btn active" aria-controls="pots-window" aria-expanded="true" title="Show/Hide Opponent Pots Window (P)">
@@ -269,8 +269,8 @@
           <div class="player-hand-wrapper">
             <div class="hand-label-banner" id="player-hand-rank">Dealing cards...</div>
             <div class="player-cards-container" id="player-cards-container">
-              <div class="card card-placeholder" id="player-card-1"></div>
-              <div class="card card-placeholder" id="player-card-2"></div>
+              <div class="card card-placeholder" id="player-card-1" aria-hidden="true"></div>
+              <div class="card card-placeholder" id="player-card-2" aria-hidden="true"></div>
             </div>
           </div>
         </div>
