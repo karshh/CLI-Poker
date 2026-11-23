@@ -113,6 +113,140 @@ export function evaluateHand(cards: readonly Card[]): HandRank {
   return best;
 }
 
+export function findBestFiveCards(cards: readonly Card[]): Card[] {
+  if (cards.length < 5 || cards.length > 7) throw new RangeError('A poker hand needs five to seven cards.');
+  const rankedCombos = combinations(cards, 5)
+    .map((combo) => ({ combo, rank: rankFive(combo) }))
+    .sort((left, right) => compareRanks(right.rank, left.rank));
+  const best = rankedCombos[0];
+  if (best === undefined) throw new Error('Could not evaluate the provided hand.');
+  return [...best.combo].sort((a, b) => b.getNumericValue() - a.getNumericValue());
+}
+
 export function compareHands(leftCards: readonly Card[], rightCards: readonly Card[]): number {
   return compareRanks(evaluateHand(leftCards), evaluateHand(rightCards));
+}
+
+const RANK_SINGULAR: Record<number, string> = {
+  1: 'Ace',
+  2: '2',
+  3: '3',
+  4: '4',
+  5: '5',
+  6: '6',
+  7: '7',
+  8: '8',
+  9: '9',
+  10: '10',
+  11: 'Jack',
+  12: 'Queen',
+  13: 'King',
+  14: 'Ace',
+};
+
+const RANK_PLURAL: Record<number, string> = {
+  1: 'Aces',
+  2: '2s',
+  3: '3s',
+  4: '4s',
+  5: '5s',
+  6: '6s',
+  7: '7s',
+  8: '8s',
+  9: '9s',
+  10: '10s',
+  11: 'Jacks',
+  12: 'Queens',
+  13: 'Kings',
+  14: 'Aces',
+};
+
+function rankSingular(value: number | undefined): string {
+  return (value !== undefined ? RANK_SINGULAR[value] : undefined) ?? String(value ?? '?');
+}
+
+function rankPlural(value: number | undefined): string {
+  return (value !== undefined ? RANK_PLURAL[value] : undefined) ?? `${String(value ?? '?')}s`;
+}
+
+/**
+ * When two compared hands share the exact same category and winnerRank beats loserRank,
+ * returns a human-readable explanation of the deciding rank or kicker (e.g.,
+ * "Pair of Kings over Pair of Jacks" or "Pair of Aces, King kicker over Queen kicker").
+ * Returns null if the categories differ or the hands are tied.
+ */
+export function explainEqualCategoryWin(winnerRank: HandRank, loserRank: HandRank): string | null {
+  if (winnerRank.category !== loserRank.category) return null;
+
+  let diffIndex = -1;
+  const maxLen = Math.max(winnerRank.tiebreak.length, loserRank.tiebreak.length);
+  for (let i = 0; i < maxLen; i += 1) {
+    const wVal = winnerRank.tiebreak[i] ?? 0;
+    const lVal = loserRank.tiebreak[i] ?? 0;
+    if (wVal !== lVal) {
+      if (wVal < lVal) return null;
+      diffIndex = i;
+      break;
+    }
+  }
+  if (diffIndex === -1) return null;
+
+  const wDiff = winnerRank.tiebreak[diffIndex];
+  const lDiff = loserRank.tiebreak[diffIndex];
+
+  switch (winnerRank.category) {
+    case 1: {
+      // One pair: tiebreak = [pairRank, kicker1, kicker2, kicker3]
+      if (diffIndex === 0) {
+        return `Pair of ${rankPlural(wDiff)} over Pair of ${rankPlural(lDiff)}`;
+      }
+      return `Pair of ${rankPlural(winnerRank.tiebreak[0])}, ${rankSingular(wDiff)} kicker over ${rankSingular(lDiff)} kicker`;
+    }
+    case 2: {
+      // Two pair: tiebreak = [highPair, lowPair, kicker]
+      const wHigh = rankPlural(winnerRank.tiebreak[0]);
+      const wLow = rankPlural(winnerRank.tiebreak[1]);
+      const lHigh = rankPlural(loserRank.tiebreak[0]);
+      const lLow = rankPlural(loserRank.tiebreak[1]);
+      if (diffIndex === 0 || diffIndex === 1) {
+        return `${wHigh} & ${wLow} over ${lHigh} & ${lLow}`;
+      }
+      return `${wHigh} & ${wLow}, ${rankSingular(wDiff)} kicker over ${rankSingular(lDiff)} kicker`;
+    }
+    case 3: {
+      // Three of a kind: tiebreak = [tripsRank, kicker1, kicker2]
+      if (diffIndex === 0) {
+        return `Three ${rankPlural(wDiff)} over Three ${rankPlural(lDiff)}`;
+      }
+      return `Three ${rankPlural(winnerRank.tiebreak[0])}, ${rankSingular(wDiff)} kicker over ${rankSingular(lDiff)} kicker`;
+    }
+    case 4:
+    case 8: {
+      // Straight / Straight flush: tiebreak = [highCard]
+      return `${rankSingular(wDiff)}-high over ${rankSingular(lDiff)}-high`;
+    }
+    case 5:
+    case 0: {
+      // Flush / High card: tiebreak = [c0, c1, c2, c3, c4]
+      if (diffIndex === 0) {
+        return `${rankSingular(wDiff)}-high over ${rankSingular(lDiff)}-high`;
+      }
+      return `${rankSingular(winnerRank.tiebreak[0])}-high, ${rankSingular(wDiff)} kicker over ${rankSingular(lDiff)} kicker`;
+    }
+    case 6: {
+      // Full house: tiebreak = [tripsRank, pairRank]
+      const wTrips = rankPlural(winnerRank.tiebreak[0]);
+      const wPair = rankPlural(winnerRank.tiebreak[1]);
+      const lTrips = rankPlural(loserRank.tiebreak[0]);
+      const lPair = rankPlural(loserRank.tiebreak[1]);
+      return `${wTrips} full of ${wPair} over ${lTrips} full of ${lPair}`;
+    }
+    case 7: {
+      // Four of a kind: tiebreak = [quadsRank, kicker]
+      if (diffIndex === 0) {
+        return `Four ${rankPlural(wDiff)} over Four ${rankPlural(lDiff)}`;
+      }
+      return `Four ${rankPlural(winnerRank.tiebreak[0])}, ${rankSingular(wDiff)} kicker over ${rankSingular(lDiff)} kicker`;
+    }
+  }
 }

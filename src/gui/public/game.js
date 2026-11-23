@@ -900,14 +900,17 @@
   }
 
   // Card HTML Generator
-  function renderCardHTML(cardData) {
+  function renderCardHTML(cardData, isBestFive = false) {
     if (!cardData || cardData.str === '??') {
       return renderCardBackHTML();
     }
     const suitMarkup = renderSuitHTML(cardData.suit);
     const accessibleName = escapeHTMLAttr(formatAccessibleCardName(cardData));
+    const highlightClass = isBestFive ? ' best-five-highlight' : '';
+    const badgeMarkup = isBestFive ? '<span class="best-five-badge" title="Best 5-Card Hand" aria-hidden="true">★</span>' : '';
     return `
-      <div class="card ${cardData.color} flipping" role="img" aria-label="${accessibleName}">
+      <div class="card ${cardData.color} flipping${highlightClass}" role="img" aria-label="${accessibleName}" data-card="${cardData.str}">
+        ${badgeMarkup}
         <div class="card-top-idx" aria-hidden="true">
           <span class="card-val" aria-hidden="true">${cardData.value}</span>
           <span class="card-suit" aria-hidden="true">${suitMarkup}</span>
@@ -1569,9 +1572,16 @@
           ${renderCardBackHTML()}
         `;
       } else {
+        const winningBestFiveSet = new Set(
+          currentState && currentState.outcome && Array.isArray(currentState.outcome.winningBestFiveCards)
+            ? currentState.outcome.winningBestFiveCards
+            : [],
+        );
+        const oppBestFiveSet = new Set(Array.isArray(opp.bestFiveCards) ? opp.bestFiveCards : []);
+        const highlightSet = winningBestFiveSet.size > 0 ? winningBestFiveSet : oppBestFiveSet;
         elCardsContainer.innerHTML = `
-          ${renderCardHTML(opp.cards[0])}
-          ${renderCardHTML(opp.cards[1])}
+          ${renderCardHTML(opp.cards[0], highlightSet.has(opp.cards[0].str))}
+          ${renderCardHTML(opp.cards[1], highlightSet.has(opp.cards[1].str))}
         `;
       }
     }
@@ -1957,12 +1967,21 @@
       elHudStreetStatus.style.color = '';
     }
 
+    // Best-Five Highlighting at Showdown (always highlight the coherent 5-card winning hand across board + hole cards)
+    const winningBestFiveSet = new Set(
+      state.outcome && Array.isArray(state.outcome.winningBestFiveCards)
+        ? state.outcome.winningBestFiveCards
+        : state.outcome && Array.isArray(state.outcome.bestFiveCards)
+          ? state.outcome.bestFiveCards
+          : [],
+    );
+
     // Community Cards (5 slots)
     for (let i = 0; i < 5; i++) {
       const slot = document.getElementById(`slot-${i}`);
       const cardData = state.board[i];
       if (cardData) {
-        slot.innerHTML = renderCardHTML(cardData);
+        slot.innerHTML = renderCardHTML(cardData, winningBestFiveSet.has(cardData.str));
       } else {
         const labels = ['FLOP 1', 'FLOP 2', 'FLOP 3', 'TURN', 'RIVER'];
         slot.innerHTML = `<span class="slot-label">${labels[i]}</span>`;
@@ -1975,8 +1994,8 @@
 
     if (state.playerCards && state.playerCards.length >= 2) {
       elPlayerCardsContainer.innerHTML = `
-        ${renderCardHTML(state.playerCards[0])}
-        ${renderCardHTML(state.playerCards[1])}
+        ${renderCardHTML(state.playerCards[0], winningBestFiveSet.has(state.playerCards[0].str))}
+        ${renderCardHTML(state.playerCards[1], winningBestFiveSet.has(state.playerCards[1].str))}
       `;
     } else {
       elPlayerCardsContainer.innerHTML = `
@@ -1985,7 +2004,11 @@
       `;
     }
     if (state.playerCurrentRank) {
-      elPlayerHandRank.textContent = `Your Hand: ${state.playerCurrentRank}`;
+      const detail =
+        state.outcome && state.outcome.result === 'win' && state.outcome.equalCategoryDetail
+          ? ` (${state.outcome.equalCategoryDetail})`
+          : '';
+      elPlayerHandRank.textContent = `Your Hand: ${state.playerCurrentRank}${detail}`;
     } else {
       elPlayerHandRank.textContent = 'Texas Hold’em';
     }

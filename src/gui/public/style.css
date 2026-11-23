@@ -1425,6 +1425,44 @@ html, body {
   animation: flipDeal 0.45s ease-out forwards;
 }
 
+/* Showdown Best-Five Hand Highlighting */
+.card.best-five-highlight {
+  border: 2.5px solid var(--gold-primary);
+  box-shadow:
+    0 0 14px rgba(255, 215, 0, 0.9),
+    0 0 26px rgba(245, 158, 11, 0.55),
+    0 8px 18px rgba(0, 0, 0, 0.75);
+}
+
+.best-five-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fffbeb 0%, #ffd700 55%, #b45309 100%);
+  border: 1.5px solid #111827;
+  color: #111827;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8), 0 0 8px rgba(255, 215, 0, 0.85);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.opp-cards-on-table .best-five-badge {
+  width: 14px;
+  height: 14px;
+  top: -5px;
+  right: -5px;
+  font-size: 8px;
+}
+
 @keyframes flipDeal {
   0% { transform: scale(0.6) rotateY(180deg) translateY(-50px); opacity: 0; }
   60% { transform: scale(1.08) rotateY(0deg) translateY(0); opacity: 1; }

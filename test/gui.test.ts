@@ -1531,3 +1531,123 @@ test('GUI card renderer exposes accessible rank+suit names, hides mirrored glyph
     assert.match(backHTML, /class="card-back-pattern" aria-hidden="true"/);
   }
 });
+
+test('PokerGameEngine finishShowdown explains equal-category wins (higher rank & kicker) and exposes bestFiveCards', () => {
+  // 1. Equal-category One pair win by higher pair (Pair of Kings over Pair of Jacks)
+  const makeHigherPairDeck = () => {
+    const cards = [
+      new Card('♠', 'K'), new Card('♥', 'K'), // Player: Pair of Kings
+      new Card('♠', 'J'), new Card('♥', 'J'), // Seat 1: Reginald: Pair of Jacks
+      new Card('♣', '3'), new Card('♦', '7'), // Seat 2: Buck: High card
+      new Card('♥', '3'), new Card('♠', '7'), // Seat 3: Elon: High card
+      new Card('♦', '3'), new Card('♣', '8'), // Seat 4: Tony: High card
+      new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'), // Flop
+      new Card('♣', 'Q'), // Turn
+      new Card('♥', '4'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const winEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
+    random: () => 0.5,
+    deckFactory: makeHigherPairDeck,
+  });
+  winEngine.act('select_opponents:reginald,buck,elon,tony');
+  winEngine.act('easy');
+  winEngine.act('check');
+  winEngine.act('check');
+  winEngine.act('check');
+  const winState = winEngine.act('check');
+
+  assert.equal(winState.stage, 'hand_over');
+  assert.equal(winState.outcome?.result, 'win');
+  assert.equal(winState.outcome?.equalCategoryDetail, 'Pair of Kings over Pair of Jacks');
+  assert.match(winState.dealerSpeech, /Pair of Kings over Pair of Jacks/);
+  assert.match(winState.outcome?.message ?? '', /Pair of Kings over Pair of Jacks/);
+  assert.match(winState.outcome?.lesson ?? '', /Pair of Kings over Pair of Jacks/);
+  assert.match(
+    winState.narrative[winState.narrative.length - 1]?.text ?? '',
+    /Pair of Kings over Pair of Jacks/,
+  );
+  assert.deepEqual(winState.outcome?.bestFiveCards, ['K♠', 'K♥', 'Q♣', '9♠', '6♦']);
+  const regAtShowdown = winState.opponents.find((o) => o.id === 'reginald')!;
+  assert.deepEqual(regAtShowdown.bestFiveCards, ['Q♣', 'J♠', 'J♥', '9♠', '6♦']);
+
+  // 2. Equal-category One pair loss by kicker (Pair of Aces, King kicker over Queen kicker)
+  const makeKickerLossDeck = () => {
+    const cards = [
+      new Card('♦', 'A'), new Card('♣', 'Q'), // Player: Pair of Aces, Queen kicker
+      new Card('♠', 'A'), new Card('♥', 'K'), // Seat 1: Reginald: Pair of Aces, King kicker (winner)
+      new Card('♣', '3'), new Card('♦', '7'), // Seat 2
+      new Card('♥', '3'), new Card('♠', '7'), // Seat 3
+      new Card('♦', '3'), new Card('♣', '8'), // Seat 4
+      new Card('♥', 'A'), new Card('♦', '6'), new Card('♠', '9'), // Flop
+      new Card('♣', '2'), // Turn
+      new Card('♥', '4'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const lossEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
+    random: () => 0.5,
+    deckFactory: makeKickerLossDeck,
+  });
+  lossEngine.act('select_opponents:reginald,buck,elon,tony');
+  lossEngine.act('easy');
+  lossEngine.act('check');
+  lossEngine.act('check');
+  lossEngine.act('check');
+  const lossState = lossEngine.act('check');
+
+  assert.equal(lossState.stage, 'hand_over');
+  assert.equal(lossState.outcome?.result, 'loss');
+  assert.equal(lossState.outcome?.equalCategoryDetail, 'Pair of Aces, King kicker over Queen kicker');
+  assert.match(lossState.dealerSpeech, /Pair of Aces, King kicker over Queen kicker/);
+  assert.match(lossState.outcome?.message ?? '', /Pair of Aces, King kicker over Queen kicker/);
+  assert.match(lossState.outcome?.lesson ?? '', /Pair of Aces, King kicker over Queen kicker/);
+  assert.deepEqual(lossState.outcome?.bestFiveCards, ['A♦', 'A♥', 'Q♣', '9♠', '6♦']);
+  assert.deepEqual(lossState.outcome?.winningBestFiveCards, ['A♠', 'A♥', 'K♥', '9♠', '6♦']);
+
+  // 3. Equal-category High card loss where hands require different board cards (A♣ K♦ 8♥ 6♠ 2♣: J♣ 10♥ vs Q♥ 3♦)
+  const makeDiffBoardHighCardDeck = () => {
+    const cards = [
+      new Card('♣', 'J'), new Card('♥', '10'), // Player: A♣ K♦ J♣ 10♥ 8♥
+      new Card('♥', 'Q'), new Card('♦', '3'), // Seat 1: Reginald: A♣ K♦ Q♥ 8♥ 6♠ (winner)
+      new Card('♣', '4'), new Card('♦', '5'), // Seat 2: Buck
+      new Card('♥', '4'), new Card('♠', '5'), // Seat 3: Elon
+      new Card('♦', '4'), new Card('♣', '5'), // Seat 4: Tony
+      new Card('♣', 'A'), new Card('♦', 'K'), new Card('♥', '8'), // Flop
+      new Card('♠', '6'), // Turn
+      new Card('♣', '2'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const diffBoardEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 2,
+    smallBlind: 0,
+    bigBlind: 0,
+    random: () => 0.5,
+    deckFactory: makeDiffBoardHighCardDeck,
+  });
+  diffBoardEngine.act('select_opponents:reginald,buck,elon,tony');
+  diffBoardEngine.act('easy');
+  diffBoardEngine.act('check');
+  diffBoardEngine.act('check');
+  diffBoardEngine.act('check');
+  const diffBoardState = diffBoardEngine.act('check');
+
+  assert.equal(diffBoardState.stage, 'hand_over');
+  assert.equal(diffBoardState.outcome?.result, 'loss');
+  assert.equal(diffBoardState.outcome?.equalCategoryDetail, 'Ace-high, Queen kicker over Jack kicker');
+  assert.match(diffBoardState.dealerSpeech, /Ace-high, Queen kicker over Jack kicker/);
+  assert.match(diffBoardState.outcome?.message ?? '', /Ace-high, Queen kicker over Jack kicker/);
+  assert.deepEqual(diffBoardState.outcome?.bestFiveCards, ['A♣', 'K♦', 'J♣', '10♥', '8♥']);
+  assert.deepEqual(diffBoardState.outcome?.winningBestFiveCards, ['A♣', 'K♦', 'Q♥', '8♥', '6♠']);
+});
