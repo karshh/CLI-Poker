@@ -2384,6 +2384,183 @@ test(
           { turnSpeed: 0.02 },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 15: Equal-Category Showdown Explanation & Best-Five Card Highlighting
+      // ----------------------------------------------------------------------
+      await t.test('equal-category showdown explains deciding rank/kicker in HUD and applies .best-five-highlight to best-five cards', async () => {
+        const makeEqualCatDeck = () => {
+          const cards = [
+            new Card('♠', 'A'), new Card('♦', 'K'), // Player: Pair of Aces, King kicker (A♠ A♥ K♦ J♠ 9♦)
+            new Card('♣', 'A'), new Card('♥', 'Q'), // Seat 1: Reginald: Pair of Aces, Queen kicker (A♣ A♥ Q♥ J♠ 9♦)
+            new Card('♣', '7'), new Card('♦', '7'), // Seat 2: Buck: Pair of 7s
+            new Card('♥', '6'), new Card('♠', '6'), // Seat 3: Elon: Pair of 6s
+            new Card('♦', '8'), new Card('♣', '4'), // Seat 4: Tony: High card
+            new Card('♥', 'A'), new Card('♠', 'J'), new Card('♦', '9'), // Flop
+            new Card('♣', '3'), // Turn
+            new Card('♥', '2'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="bet"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            // Close Table Pots window so all 4 seated opponents and highlighted cards are clearly visible
+            await page.locator('#pots-window-close').click();
+
+            const showdownDom = await page.evaluate(() => {
+              const dealerText = document.getElementById('dealer-bubble-text')?.textContent?.trim() || '';
+              const dialogueText = document.getElementById('dialogue-main-text')?.textContent?.trim() || '';
+              const promptTitle = document.getElementById('action-prompt-title')?.textContent?.trim() || '';
+              const handBanner = document.getElementById('player-hand-rank')?.textContent?.trim() || '';
+              const playerHighlighted = Array.from(
+                document.querySelectorAll('#player-cards-container .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              const boardHighlighted = Array.from(
+                document.querySelectorAll('#community-cards-container .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              const regHighlighted = Array.from(
+                document.querySelectorAll('#opp-cards-container-reginald .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              return {
+                dealerText,
+                dialogueText,
+                promptTitle,
+                handBanner,
+                playerHighlighted,
+                boardHighlighted,
+                regHighlighted,
+              };
+            });
+
+            assert.match(showdownDom.dealerText, /Pair of Aces, King kicker over Queen kicker/);
+            assert.match(showdownDom.dialogueText, /Pair of Aces, King kicker over Queen kicker/);
+            assert.match(showdownDom.promptTitle, /Pair of Aces, King kicker over Queen kicker/);
+            assert.match(showdownDom.handBanner, /One pair \(Pair of Aces, King kicker over Queen kicker\)/);
+            assert.deepEqual(showdownDom.playerHighlighted, ['A♠', 'K♦']);
+            assert.deepEqual(showdownDom.boardHighlighted, ['A♥', 'J♠', '9♦']);
+            assert.deepEqual(showdownDom.regHighlighted, []);
+
+            const screenshotPath = path.resolve(process.cwd(), 'docs', 'screenshots', 'issue-9-resolved.png');
+            fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+            await page.screenshot({ path: screenshotPath });
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialPlayerChips: 500,
+              initialOpponentChips: 500,
+              initialButtonSeatIndex: 0,
+              random: () => 0.5,
+              deckFactory: makeEqualCatDeck,
+            },
+          },
+        );
+
+        // Sub-case: Equal-category High card loss where hands use different board cards (A♣ K♦ 8♥ 6♠ 2♣: Player J♣ 10♥ vs Reginald Q♥ 3♦)
+        const makeDiffBoardLossDeck = () => {
+          const cards = [
+            new Card('♣', 'J'), new Card('♥', '10'), // Player: A♣ K♦ J♣ 10♥ 8♥
+            new Card('♥', 'Q'), new Card('♦', '3'), // Seat 1: Reginald: A♣ K♦ Q♥ 8♥ 6♠ (winner)
+            new Card('♣', '4'), new Card('♦', '5'), // Seat 2: Buck
+            new Card('♥', '4'), new Card('♠', '5'), // Seat 3: Elon
+            new Card('♦', '4'), new Card('♣', '5'), // Seat 4: Tony
+            new Card('♣', 'A'), new Card('♦', 'K'), new Card('♥', '8'), // Flop
+            new Card('♠', '6'), // Turn
+            new Card('♣', '2'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const lossDom = await page.evaluate(() => {
+              const dealerText = document.getElementById('dealer-bubble-text')?.textContent?.trim() || '';
+              const promptTitle = document.getElementById('action-prompt-title')?.textContent?.trim() || '';
+              const handBanner = document.getElementById('player-hand-rank')?.textContent?.trim() || '';
+              const allHighlighted = Array.from(document.querySelectorAll('.card.best-five-highlight')).map((el) =>
+                el.getAttribute('data-card'),
+              );
+              const playerHighlighted = Array.from(
+                document.querySelectorAll('#player-cards-container .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              const boardHighlighted = Array.from(
+                document.querySelectorAll('#community-cards-container .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              const regHighlighted = Array.from(
+                document.querySelectorAll('#opp-cards-container-reginald .card.best-five-highlight'),
+              ).map((el) => el.getAttribute('data-card'));
+              return {
+                dealerText,
+                promptTitle,
+                handBanner,
+                allHighlighted,
+                playerHighlighted,
+                boardHighlighted,
+                regHighlighted,
+              };
+            });
+
+            // Coherent 5-card winning hand highlighted across board (4 cards) + Reginald (1 card) = 5 cards total, 0 on losing player
+            assert.equal(lossDom.allHighlighted.length, 5);
+            assert.deepEqual(lossDom.boardHighlighted, ['A♣', 'K♦', '8♥', '6♠']);
+            assert.deepEqual(lossDom.regHighlighted, ['Q♥']);
+            assert.deepEqual(lossDom.playerHighlighted, []);
+
+            // Player hand banner does NOT claim Reginald's Queen kicker over Jack kicker
+            assert.equal(lossDom.handBanner, 'Your Hand: High card');
+            assert.doesNotMatch(lossDom.handBanner, /Queen kicker over Jack kicker/);
+            assert.match(lossDom.dealerText, /Ace-high, Queen kicker over Jack kicker/);
+            assert.match(lossDom.promptTitle, /Ace-high, Queen kicker over Jack kicker/);
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialPlayerChips: 500,
+              initialOpponentChips: 500,
+              initialButtonSeatIndex: 2,
+              smallBlind: 0,
+              bigBlind: 0,
+              random: () => 0.5,
+              deckFactory: makeDiffBoardLossDeck,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }

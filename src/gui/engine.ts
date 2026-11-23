@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Deck, Card, type Suit, type CardValue } from '../card.js';
-import { compareHands, evaluateHand, type HandRank } from '../poker.js';
+import {
+  compareHands,
+  evaluateHand,
+  explainEqualCategoryWin,
+  findBestFiveCards,
+  type HandRank,
+} from '../poker.js';
 import { decideAction, type Mode } from '../strategy.js';
 import { STREETS } from '../game.js';
 
@@ -140,6 +146,7 @@ export interface OpponentData {
   speech: string;
   reaction: OpponentReaction;
   rank: HandRank | null;
+  bestFiveCards?: string[];
 }
 
 export interface TurnEvent {
@@ -232,6 +239,9 @@ export interface SerializedGameState {
     winnerNames: string[];
     message: string;
     lesson?: string;
+    equalCategoryDetail?: string;
+    bestFiveCards?: string[];
+    winningBestFiveCards?: string[];
   } | null;
   handCount: number;
   sessionSummary: SessionSummary;
@@ -452,6 +462,7 @@ interface InternalOpponent {
   speech: string;
   reaction: OpponentReaction;
   rank: HandRank | null;
+  bestFiveCards: string[] | null;
 }
 
 export interface PokerGameEngineOptions {
@@ -649,6 +660,7 @@ export class PokerGameEngine {
         speech: profile.introLine,
         reaction: 'neutral',
         rank: null,
+        bestFiveCards: null,
       };
     });
   }
@@ -714,6 +726,7 @@ export class PokerGameEngine {
       speech: opp.speech,
       reaction: opp.reaction,
       rank: opp.cardsHidden ? null : opp.rank,
+      ...(!opp.cardsHidden && opp.bestFiveCards ? { bestFiveCards: opp.bestFiveCards } : {}),
     };
   }
 
@@ -1137,6 +1150,7 @@ export class PokerGameEngine {
       opp.reaction = 'neutral';
       opp.speech = opp.profile.introLine;
       opp.rank = null;
+      opp.bestFiveCards = null;
     }
 
     this.captureTurnStartSnapshot();
@@ -1242,6 +1256,7 @@ export class PokerGameEngine {
       opp.reaction = 'neutral';
       opp.speech = '';
       opp.rank = null;
+      opp.bestFiveCards = null;
     }
 
     this.board = [];
@@ -1918,17 +1933,19 @@ export class PokerGameEngine {
 
     const playerFull = [...this.playerCards, ...this.board];
     const playerRank = evaluateHand(playerFull);
+    const playerBestFive = findBestFiveCards(playerFull).map((c) => c.toString());
 
     type Contender = {
       isPlayer: boolean;
       name: string;
       cards: Card[];
       rank: HandRank;
+      bestFive: string[];
       opp?: InternalOpponent;
     };
 
     const contenders: Contender[] = [
-      { isPlayer: true, name: 'You', cards: playerFull, rank: playerRank },
+      { isPlayer: true, name: 'You', cards: playerFull, rank: playerRank, bestFive: playerBestFive },
     ];
 
     for (const opp of this.opponents) {
@@ -1937,8 +1954,17 @@ export class PokerGameEngine {
       if (opp.folded) continue;
       const oppFull = [...opp.cards, ...this.board];
       const oppRank = evaluateHand(oppFull);
+      const oppBestFive = findBestFiveCards(oppFull).map((c) => c.toString());
       opp.rank = oppRank;
-      contenders.push({ isPlayer: false, name: opp.profile.name, cards: oppFull, rank: oppRank, opp });
+      opp.bestFiveCards = oppBestFive;
+      contenders.push({
+        isPlayer: false,
+        name: opp.profile.name,
+        cards: oppFull,
+        rank: oppRank,
+        bestFive: oppBestFive,
+        opp,
+      });
     }
 
     const seats: PotSeat[] = [
@@ -2019,9 +2045,14 @@ export class PokerGameEngine {
 
     if (playerWonAllPotsSole) {
       const wonAmt = this.pot > 0 ? playerPayout : 0;
+      const equalDetail = explainEqualCategoryWin(playerRank, bestOpp.rank);
+      const detailSuffix = equalDetail ? ` (${equalDetail})` : '';
       const explanation = hasSidePots
-        ? `Showdown! You won $${wonAmt} total with ${playerRank.name} — ${potRecap}. (${oppBreakdown}).`
-        : `Showdown! You won the $${wonAmt} pot with ${playerRank.name}! (${oppBreakdown}).`;
+        ? `Showdown! You won $${wonAmt} total with ${playerRank.name}${detailSuffix} — ${potRecap}. (${oppBreakdown}).`
+        : `Showdown! You won the $${wonAmt} pot with ${playerRank.name}${detailSuffix}! (${oppBreakdown}).`;
+      const lesson = equalDetail
+        ? `Lesson: your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name} (${equalDetail}).`
+        : undefined;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -2033,8 +2064,12 @@ export class PokerGameEngine {
         opponentRank: bestOpp.rank,
         winnerNames: hasSidePots ? allPaidWinners.map((w) => w.name) : ['You'],
         message: hasSidePots
-          ? `You won $${wonAmt} total with ${playerRank.name} (${potRecap}).`
-          : `You won $${wonAmt}! Your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name}${oppContenders.length > 1 ? ` (${oppBreakdown})` : ''}.`,
+          ? `You won $${wonAmt} total with ${playerRank.name}${detailSuffix} (${potRecap}).`
+          : `You won $${wonAmt}! Your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name}${detailSuffix}${oppContenders.length > 1 ? ` (${oppBreakdown})` : ''}.`,
+        ...(lesson ? { lesson } : {}),
+        ...(equalDetail ? { equalCategoryDetail: equalDetail } : {}),
+        bestFiveCards: playerBestFive,
+        winningBestFiveCards: playerBestFive,
       };
     } else if (pureTieAllPots) {
       const tiedOppNames = this.formatNameList(tiedOpponentsOverall.map((w) => w.name));
@@ -2056,13 +2091,24 @@ export class PokerGameEngine {
         message: hasSidePots
           ? `Tie with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
           : `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
+        bestFiveCards: playerBestFive,
+        winningBestFiveCards: playerBestFive,
       };
     } else if (playerWonAny && otherWonAny) {
       const mainWinnerNames = this.formatNameList((mainSlice?.winners ?? []).map((w) => w.name));
+      const equalDetail = !playerWonMain
+        ? explainEqualCategoryWin(bestOpp.rank, playerRank)
+        : explainEqualCategoryWin(playerRank, bestOpp.rank);
+      const detailSuffix = equalDetail ? ` — ${equalDetail}` : '';
       const summary = !playerWonMain
-        ? `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} in side pot(s) with ${playerRank.name}; ${mainWinnerNames} took the main pot (${bestOpp.rank.name}).`
-        : `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} total with ${playerRank.name}.`;
+        ? `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} in side pot(s) with ${playerRank.name}; ${mainWinnerNames} took the main pot (${bestOpp.rank.name}${detailSuffix}).`
+        : `Showdown! Mixed result — ${potRecap}. You won $${playerPayout} total with ${playerRank.name}${detailSuffix ? ` (${equalDetail})` : ''}.`;
       const explanation = `${summary} (${oppBreakdown}).`;
+      const lesson = equalDetail
+        ? !playerWonMain
+          ? `Lesson: in the main pot, your ${playerRank.name} lost to ${bestOpp.name}'s ${bestOpp.rank.name} (${equalDetail}).`
+          : `Lesson: in the main pot, your ${playerRank.name} beat ${bestOpp.name}'s ${bestOpp.rank.name} (${equalDetail}).`
+        : undefined;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -2073,16 +2119,22 @@ export class PokerGameEngine {
         playerRank,
         opponentRank: bestOpp.rank,
         winnerNames: allPaidWinners.map((w) => w.name),
-        message: `Mixed result (you won $${playerPayout}): ${potRecap}.`,
+        message: `Mixed result (you won $${playerPayout}): ${potRecap}${equalDetail ? ` (${equalDetail})` : ''}.`,
+        ...(lesson ? { lesson } : {}),
+        ...(equalDetail ? { equalCategoryDetail: equalDetail } : {}),
+        bestFiveCards: playerBestFive,
+        winningBestFiveCards: playerWonMain ? playerBestFive : bestOpp.bestFive,
       };
     } else {
       const winnerSeats = allPaidWinners.length > 0 ? allPaidWinners : settlement.bestOverallWinners;
       const winnerLabel = this.formatNameList(winnerSeats.map((w) => w.name));
       const winningRankName = bestOpp.rank.name;
+      const equalDetail = explainEqualCategoryWin(bestOpp.rank, playerRank);
+      const detailSuffix = equalDetail ? ` (${equalDetail})` : '';
       const explanation = hasSidePots
-        ? `Showdown! ${potRecap}. Your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`
-        : `Showdown! ${winnerLabel} won the $${this.pot} pot with ${winningRankName}, beating your ${playerRank.name}.`;
-      const lesson = `Lesson: your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}.`;
+        ? `Showdown! ${potRecap}. Your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}${detailSuffix}.`
+        : `Showdown! ${winnerLabel} won the $${this.pot} pot with ${winningRankName}, beating your ${playerRank.name}${detailSuffix}.`;
+      const lesson = `Lesson: your ${playerRank.name} lost to ${bestOpp.name}'s ${winningRankName}${detailSuffix}.`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: `${explanation} (${oppBreakdown}).` });
       this.outcome = {
@@ -2094,9 +2146,12 @@ export class PokerGameEngine {
         opponentRank: bestOpp.rank,
         winnerNames: winnerSeats.map((w) => w.name),
         message: hasSidePots
-          ? `${potRecap}. (${winningRankName} over your ${playerRank.name}).`
-          : `${winnerLabel} won $${this.pot} with ${winningRankName} over your ${playerRank.name}.`,
+          ? `${potRecap}. (${winningRankName} over your ${playerRank.name}${equalDetail ? ` — ${equalDetail}` : ''}).`
+          : `${winnerLabel} won $${this.pot} with ${winningRankName} over your ${playerRank.name}${detailSuffix}.`,
         lesson,
+        ...(equalDetail ? { equalCategoryDetail: equalDetail } : {}),
+        bestFiveCards: playerBestFive,
+        winningBestFiveCards: bestOpp.bestFive,
       };
     }
 
