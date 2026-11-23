@@ -173,6 +173,17 @@ export interface PotAwardBreakdown {
   winners: { id: string; name: string; amount: number }[];
 }
 
+export interface SessionSummary {
+  handsPlayed: number;
+  handsWon: number;
+  startingStack: number;
+  finalStack: number;
+  rebuyCount: number;
+  rebuyChips: number;
+  totalBuyIn: number;
+  netProfit: number;
+}
+
 export interface SerializedGameState {
   tableInstanceId: string;
   stateRevision: number;
@@ -223,6 +234,7 @@ export interface SerializedGameState {
     lesson?: string;
   } | null;
   handCount: number;
+  sessionSummary: SessionSummary;
   lastAction: {
     actor: 'player' | 'opponent' | 'dealer';
     action: string;
@@ -515,6 +527,8 @@ export class PokerGameEngine {
   private playerStreetContribution = 0;
   private playerTotalPotWon = 0;
   private playerHandsWon = 0;
+  private playerRebuyCount = 0;
+  private playerRebuyChips = 0;
   private playerFolded = false;
   private playerCards: [Card, Card] | null = null;
   private opponents: InternalOpponent[] = [];
@@ -789,8 +803,33 @@ export class PokerGameEngine {
       playerCurrentRank,
       outcome: this.outcome,
       handCount: this.handCount,
+      sessionSummary: this.getSessionSummary(),
       lastAction: this.lastAction,
     };
+  }
+
+  private getSessionSummary(): SessionSummary {
+    const totalBuyIn = this.defaultPlayerChips + this.playerRebuyChips;
+    return {
+      handsPlayed: this.handCount,
+      handsWon: this.playerHandsWon,
+      startingStack: this.defaultPlayerChips,
+      finalStack: this.playerChips,
+      rebuyCount: this.playerRebuyCount,
+      rebuyChips: this.playerRebuyChips,
+      totalBuyIn,
+      netProfit: this.playerChips - totalBuyIn,
+    };
+  }
+
+  private formatSessionNet(netProfit: number): string {
+    return netProfit > 0 ? `+$${netProfit}` : netProfit < 0 ? `-$${Math.abs(netProfit)}` : '$0';
+  }
+
+  private formatSessionSummaryLine(): string {
+    const s = this.getSessionSummary();
+    const netText = this.formatSessionNet(s.netProfit);
+    return `Session complete! Hands: ${s.handsPlayed} • Final Stack: $${s.finalStack} • Rebuys: ${s.rebuyCount} ($${s.rebuyChips}) • Net: ${netText}.`;
   }
 
   private pickThinkingLine(opp: InternalOpponent): string {
@@ -1036,8 +1075,9 @@ export class PokerGameEngine {
       }
       if (action === 'no' || action === 'n' || action === 'quit') {
         this.stage = 'game_over';
-        this.dealerSpeech = 'Thanks for playing at the VIP High Roller table!';
-        this.narrative.push({ speaker: 'Dealer', text: 'Session finished. Thank you for playing!' });
+        const summaryLine = this.formatSessionSummaryLine();
+        this.dealerSpeech = `${summaryLine} Thanks for playing at the VIP High Roller table!`;
+        this.narrative.push({ speaker: 'Dealer', text: `${summaryLine} Thank you for playing!` });
         this.stateRevision += 1;
         return this.getState();
       }
@@ -1069,6 +1109,8 @@ export class PokerGameEngine {
     this.playerStreetContribution = 0;
     this.playerTotalPotWon = 0;
     this.playerHandsWon = 0;
+    this.playerRebuyCount = 0;
+    this.playerRebuyChips = 0;
     this.playerFolded = false;
     this.playerCards = null;
     this.opponentLedger.clear();
@@ -1168,6 +1210,8 @@ export class PokerGameEngine {
     if (this.playerChips <= 0) {
       this.narrative.push({ speaker: 'Dealer', text: 'Rebuy granted! House provides $500 chips.' });
       this.playerChips = 500;
+      this.playerRebuyCount += 1;
+      this.playerRebuyChips += 500;
     }
     for (const opp of this.opponents) {
       if (opp.chips <= 0) {
@@ -2160,7 +2204,7 @@ export class PokerGameEngine {
         type: 'game_over',
         revision: this.stateRevision,
         token,
-        message: 'Session complete.',
+        message: this.formatSessionSummaryLine(),
         choices: [{ id: 'restart', label: 'Start New Session', key: 'Space', variant: 'primary' }],
       };
     }

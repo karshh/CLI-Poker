@@ -978,16 +978,30 @@ test(
             await page.locator('#drawer-close').click();
             assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), false);
 
-            // Cash Out -> Start New Session -> modal reopens AND pot/table/log reset cleanly to $0
+            // Cash Out -> Session Summary Panel appears with Hands Played, Final Stack, Rebuys, and Net Gain/Loss,
+            // then Start New Session hides the panel, reopens the modal, and resets pot/table/log cleanly to $0
+            assert.equal(await page.locator('#session-summary-panel').isHidden(), true);
             const foldBtn = page.locator('#action-buttons-group button', { hasText: 'Fold' });
             if ((await foldBtn.count()) > 0) {
               await foldBtn.click();
               await waitForPromptReady(page, 'Play another hand?');
             }
+            assert.equal(await page.locator('#session-summary-panel').isHidden(), true);
             await page.locator('#action-buttons-group button', { hasText: 'Cash Out' }).click();
             await waitForPromptReady(page, 'Session complete');
+            assert.equal(await page.locator('#session-summary-panel').isVisible(), true);
+            const summaryHandsText = (await page.locator('#summary-hands-played').textContent())?.trim() || '';
+            const summaryStackText = (await page.locator('#summary-final-stack').textContent())?.trim() || '';
+            const summaryRebuysText = (await page.locator('#summary-rebuys').textContent())?.trim() || '';
+            const summaryNetText = (await page.locator('#summary-net-profit').textContent())?.trim() || '';
+            assert.ok(Number(summaryHandsText) >= 1, `Expected handsPlayed >= 1, got ${summaryHandsText}`);
+            assert.match(summaryStackText, /^\$\d+$/);
+            assert.equal(summaryRebuysText, '0 ($0)');
+            assert.match(summaryNetText, /^(\+\$\d+|-\$\d+|\$0)$/);
+
             await page.locator('#action-buttons-group button', { hasText: 'Start New Session' }).click();
             await page.waitForSelector('dialog#opponent-modal-overlay[open]');
+            assert.equal(await page.locator('#session-summary-panel').isHidden(), true);
             assert.equal((await page.locator('#pot-amount').textContent())?.trim(), '$0');
             assert.equal((await page.locator('#pots-window-total').textContent())?.trim(), 'Pot: $0');
           },
@@ -2132,6 +2146,79 @@ test(
               initialButtonSeatIndex: 0,
               random: () => 0.99,
               deckFactory,
+            },
+          },
+        );
+      });
+
+      await t.test('Cash Out screen displays session summary panel with hands played, final stack, rebuy credits, and net gain/loss', async () => {
+        const makeWinningDeck = () => {
+          const cards = [
+            new Card('♠', 'A'), new Card('♥', 'A'),
+            new Card('♠', 'K'), new Card('♥', 'K'),
+            new Card('♠', 'Q'), new Card('♥', 'Q'),
+            new Card('♠', 'J'), new Card('♥', 'J'),
+            new Card('♠', '10'), new Card('♥', '10'),
+            new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+            new Card('♣', '4'),
+            new Card('♥', '7'),
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+
+            // Play 4 hands to reach an $820 stack (+$320 net gain with 0 rebuys)
+            for (let h = 1; h <= 4; h += 1) {
+              await waitForPromptReady(page, 'Pre-flop');
+              const preBtn = page.locator('#action-buttons-group button[data-choice-id="call"]');
+              if ((await preBtn.count()) > 0) {
+                await preBtn.click();
+              } else {
+                await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+              }
+              await waitForPromptReady(page, 'Flop');
+              await page.locator(`#action-buttons-group button[data-choice-id="${h <= 2 ? 'bet' : 'check'}"]`).click();
+              await waitForPromptReady(page, 'Turn');
+              await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+              await waitForPromptReady(page, 'River');
+              await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+              await waitForPromptReady(page, 'Play another hand?');
+              if (h < 4) {
+                await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+              }
+            }
+
+            assert.equal(await page.locator('#session-summary-panel').isHidden(), true);
+            await page.locator('#action-buttons-group button[data-choice-id="no"]').click();
+            await waitForPromptReady(page, 'Session complete!');
+
+            assert.equal(await page.locator('#session-summary-panel').isVisible(), true);
+            assert.equal((await page.locator('#summary-hands-played').textContent())?.trim(), '4');
+            assert.equal((await page.locator('#summary-hands-won').textContent())?.trim(), '4 hands won');
+            assert.equal((await page.locator('#summary-final-stack').textContent())?.trim(), '$820');
+            assert.equal((await page.locator('#summary-rebuys').textContent())?.trim(), '0 ($0)');
+            assert.equal((await page.locator('#summary-net-profit').textContent())?.trim(), '+$320');
+            assert.equal(
+              await page.locator('#summary-net-profit').evaluate((el) => el.classList.contains('net-positive')),
+              true,
+            );
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialPlayerChips: 500,
+              initialOpponentChips: 500,
+              initialButtonSeatIndex: 0,
+              random: () => 0.5,
+              deckFactory: makeWinningDeck,
             },
           },
         );

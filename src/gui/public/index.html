@@ -300,6 +300,36 @@
           </div>
         </div>
 
+        <!-- Session Summary Panel (Appears on Cash Out / stage === 'game_over') -->
+        <div class="session-summary-panel" id="session-summary-panel" hidden aria-label="Cash Out Session Summary">
+          <div class="session-summary-header">
+            <span class="session-summary-badge">🏆 SESSION CASH-OUT SUMMARY</span>
+            <span class="session-summary-buyin" id="summary-total-buyin">Total Buy-In: $500</span>
+          </div>
+          <div class="session-summary-grid">
+            <div class="summary-stat-card" id="summary-card-hands">
+              <span class="summary-stat-label">Hands Played</span>
+              <span class="summary-stat-value" id="summary-hands-played">0</span>
+              <span class="summary-stat-sub" id="summary-hands-won">0 won</span>
+            </div>
+            <div class="summary-stat-card" id="summary-card-stack">
+              <span class="summary-stat-label">Final Stack</span>
+              <span class="summary-stat-value" id="summary-final-stack">$500</span>
+              <span class="summary-stat-sub" id="summary-starting-stack">Started at $500</span>
+            </div>
+            <div class="summary-stat-card" id="summary-card-rebuys">
+              <span class="summary-stat-label">Rebuys</span>
+              <span class="summary-stat-value" id="summary-rebuys">0 ($0)</span>
+              <span class="summary-stat-sub" id="summary-rebuys-sub">House rebuy credits</span>
+            </div>
+            <div class="summary-stat-card" id="summary-card-net">
+              <span class="summary-stat-label">Net Gain / Loss</span>
+              <span class="summary-stat-value net-even" id="summary-net-profit">$0</span>
+              <span class="summary-stat-sub" id="summary-net-sub">After rebuy credits</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Interactive Action Options (Appears when prompt is required) -->
         <div class="actions-panel" id="actions-panel">
           <div class="action-prompt-title" id="action-prompt-title">Your Action:</div>

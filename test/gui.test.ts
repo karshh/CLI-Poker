@@ -1201,6 +1201,164 @@ test('PokerGameEngine labels and logs big-blind pre-flop raises as raises while 
   assert.equal(afterBtnCall.prompt?.choices.find((c) => c.id === 'call')?.label, 'Call $10');
 });
 
+test('PokerGameEngine produces full Cash Out sessionSummary with hands played, final stack, rebuy credits, and net gain/loss', () => {
+  // 1. Multi-hand session without rebuys (e.g. 4 hands ending with an $820 stack -> +$320 net gain):
+  const makeWinningDeck = () => {
+    const cards = [
+      new Card('♠', 'A'), new Card('♥', 'A'), // Player: Pair of Aces
+      new Card('♠', 'K'), new Card('♥', 'K'), // Seat 1
+      new Card('♠', 'Q'), new Card('♥', 'Q'), // Seat 2
+      new Card('♠', 'J'), new Card('♥', 'J'), // Seat 3
+      new Card('♠', '10'), new Card('♥', '10'), // Seat 4
+      new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'), // Flop
+      new Card('♣', '4'), // Turn
+      new Card('♥', '7'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const fourHandEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => 0.5, // Easy mode: opponents always call/check
+    deckFactory: makeWinningDeck,
+  });
+  fourHandEngine.act('select_opponents:reginald,buck,elon,tony');
+  fourHandEngine.act('easy');
+
+  // Hand 1: Player bets/raises all 4 streets ($20 pre-flop + $20 flop + $30 turn + $40 river = $110 x 5 = $550 pot -> +$440 net = $940)
+  // Wait: to hit an exact $820 stack after 4 hands (+$320 net = +$80 per hand = $20 total wager per seat x 4 opponents):
+  // On each hand, everyone puts in $20 pre-flop (or $10 pre-flop + $10) -> let's check:
+  // If Player calls $10 pre-flop and bets $20 on Flop, then checks Turn and River:
+  // Total per seat = $30 ($150 pot, player nets +$120).
+  // Across 4 hands:
+  //   Hand 1: call $10 pre-flop, bet $20 flop, check turn, check river -> +$120 ($620)
+  //   Hand 2: call $10 pre-flop, bet $20 flop, check turn, check river -> +$120 ($740)
+  //   Hand 3: call $10 pre-flop, check flop, check turn, check river -> +$40 ($780)
+  //   Hand 4: call $10 pre-flop, check flop, check turn, check river -> +$40 ($820)!
+  for (let h = 1; h <= 4; h += 1) {
+    let s = fourHandEngine.getState();
+    // Pre-flop: call (or check if BB on Hand 4)
+    s = fourHandEngine.act(s.stage === 'player_response' ? 'call' : 'check');
+    // Flop: bet $20 on Hands 1 & 2, check on Hands 3 & 4
+    if (h <= 2) {
+      s = fourHandEngine.act('bet');
+    } else {
+      s = fourHandEngine.act('check');
+    }
+    // Turn: check
+    s = fourHandEngine.act('check');
+    // River: check
+    s = fourHandEngine.act('check');
+    assert.equal(s.stage, 'hand_over');
+    if (h < 4) {
+      fourHandEngine.act('yes');
+    }
+  }
+
+  const cashOutState = fourHandEngine.act('no');
+  assert.equal(cashOutState.stage, 'game_over');
+  assert.equal(cashOutState.playerChips, 820);
+  assert.deepEqual(cashOutState.sessionSummary, {
+    handsPlayed: 4,
+    handsWon: 4,
+    startingStack: 500,
+    finalStack: 820,
+    rebuyCount: 0,
+    rebuyChips: 0,
+    totalBuyIn: 500,
+    netProfit: 320,
+  });
+  assert.equal(
+    cashOutState.prompt?.message,
+    'Session complete! Hands: 4 • Final Stack: $820 • Rebuys: 0 ($0) • Net: +$320.',
+  );
+  assert.match(cashOutState.dealerSpeech, /Hands: 4 • Final Stack: \$820 • Rebuys: 0 \(\$0\) • Net: \+\$320/);
+  assert.match(
+    cashOutState.narrative[cashOutState.narrative.length - 1]?.text ?? '',
+    /Hands: 4 • Final Stack: \$820 • Rebuys: 0 \(\$0\) • Net: \+\$320/,
+  );
+
+  // 2. Session WITH a $500 house rebuy after busting:
+  //    Player starts with $10, loses all $10 on Hand 1 ($0 stack), clicks Play Again ('yes') -> granted $500 house rebuy!
+  //    On Hand 2, player wins a $50 pot (calls $10 pre-flop, checks down -> $540 final stack).
+  //    Even though finalStack ($540) > startingStack ($10), totalBuyIn is $10 + $500 = $510 -> netProfit is +$30 (NOT +$530!).
+  //    And if player folds Hand 2 after posting $0 (BTN) and cashes out with $500 after starting with $500 + 1 rebuy ($500) = $1000 totalBuyIn -> netProfit is -$500!
+  let rebuyHand = 0;
+  const makeRebuyDeck = () => {
+    rebuyHand += 1;
+    if (rebuyHand === 1) {
+      // Hand 1: Player loses $10 all-in to Reginald's Aces
+      const cards = [
+        new Card('♠', '3'), new Card('♥', '7'), // Player (loses)
+        new Card('♠', 'A'), new Card('♥', 'A'), // Seat 1: Reginald (wins)
+        new Card('♦', 'J'), new Card('♥', '8'),
+        new Card('♦', '10'), new Card('♦', '3'),
+        new Card('♠', 'J'), new Card('♣', '5'),
+        new Card('♣', '2'), new Card('♦', '6'), new Card('♠', '9'),
+        new Card('♣', 'Q'),
+        new Card('♥', '4'),
+      ];
+      return { draw: () => cards.shift()! };
+    }
+    return makeWinningDeck();
+  };
+
+  const rebuyEngine = new PokerGameEngine({
+    initialPlayerChips: 10,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+    deckFactory: makeRebuyDeck,
+  });
+  rebuyEngine.act('select_opponents:reginald,buck,elon,tony');
+  rebuyEngine.act('easy');
+  const bustedHand1 = rebuyEngine.act('call'); // Player calls $10 all-in -> loses at showdown -> $0 chips
+  assert.equal(bustedHand1.stage, 'hand_over');
+  assert.equal(bustedHand1.playerChips, 0);
+  assert.equal(bustedHand1.sessionSummary.rebuyCount, 0);
+
+  // Clicking Play Again grants a $500 house rebuy (rebuyCount = 1, rebuyChips = 500, totalBuyIn = 510)
+  const afterRebuyStart = rebuyEngine.act('yes');
+  assert.equal(afterRebuyStart.sessionSummary.rebuyCount, 1);
+  assert.equal(afterRebuyStart.sessionSummary.rebuyChips, 500);
+  assert.equal(afterRebuyStart.sessionSummary.totalBuyIn, 510);
+
+  // Player folds Hand 2 (as CO, $0 posted) with $500 stack and cashes out:
+  // Final stack = $500, Total Buy-In = $510 ($10 initial + $500 rebuy) -> Net = -$10!
+  rebuyEngine.act('fold');
+  const rebuyCashOut = rebuyEngine.act('no');
+  assert.equal(rebuyCashOut.stage, 'game_over');
+  assert.deepEqual(rebuyCashOut.sessionSummary, {
+    handsPlayed: 2,
+    handsWon: 0,
+    startingStack: 10,
+    finalStack: 500,
+    rebuyCount: 1,
+    rebuyChips: 500,
+    totalBuyIn: 510,
+    netProfit: -10,
+  });
+  assert.equal(
+    rebuyCashOut.prompt?.message,
+    'Session complete! Hands: 2 • Final Stack: $500 • Rebuys: 1 ($500) • Net: -$10.',
+  );
+
+  // Restart resets rebuyCount, rebuyChips, handsPlayed, and netProfit back to 0
+  const afterRestart = rebuyEngine.act('restart');
+  assert.deepEqual(afterRestart.sessionSummary, {
+    handsPlayed: 0,
+    handsWon: 0,
+    startingStack: 10,
+    finalStack: 10,
+    rebuyCount: 0,
+    rebuyChips: 0,
+    totalBuyIn: 10,
+    netProfit: 0,
+  });
+});
+
 test('HTTP request handler serves state, static files, and handles actions', async () => {
   const engine = new PokerGameEngine();
   const handler = createPokerRequestHandler(engine);
