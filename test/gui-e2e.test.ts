@@ -84,6 +84,7 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
   const distPublicDir = path.resolve(process.cwd(), 'dist', 'src', 'gui', 'public');
   assert.ok(fs.existsSync(path.join(distPublicDir, 'index.html')), 'dist/src/gui/public/index.html missing');
   assert.ok(fs.existsSync(path.join(distPublicDir, 'game.js')), 'dist/src/gui/public/game.js missing');
+  assert.ok(fs.existsSync(path.join(distPublicDir, 'ads.js')), 'dist/src/gui/public/ads.js missing');
   assert.ok(fs.existsSync(path.join(distPublicDir, 'style.css')), 'dist/src/gui/public/style.css missing');
 
   const instance = await startServer(0, distPublicDir);
@@ -93,13 +94,18 @@ test('e2e (HTTP): loopback bind, same-origin enforcement, built dist assets, por
 
   try {
     // 2. Verify only bundled static assets serve directly from built dist directory, with CSP frame-ancestors 'none'
-    for (const assetPath of ['/', '/index.html', '/game.js', '/style.css']) {
+    for (const assetPath of ['/', '/index.html', '/game.js', '/ads.js', '/style.css']) {
       const res = await fetch(`${baseUrl}${assetPath}`);
       assert.equal(res.status, 200, `Expected 200 for ${assetPath}`);
       if (assetPath === '/' || assetPath === '/index.html') {
         assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'none'");
       }
     }
+    const adCfgRes = await fetch(`${baseUrl}/api/ad-config`);
+    assert.equal(adCfgRes.status, 200);
+    const adCfg = (await adCfgRes.json()) as { enabled: boolean; provider: string };
+    assert.equal(adCfg.enabled, true);
+    assert.equal(adCfg.provider, 'mock');
     assert.equal((await fetch(`${baseUrl}/not-a-bundled-asset.txt`)).status, 404);
 
     // 3. Security hardening: Host validation (DNS rebinding), exact Origin + JSON Content-Type, malformed URLs, & 413 body cap
@@ -2901,6 +2907,160 @@ test(
               deckFactory: makePlaybackTestDeck,
             },
           },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 23: Non-Intrusive Side & Bottom Localhost Mock Ads (Desktop, Mobile, Short Landscape & ?ads=off)
+      // ----------------------------------------------------------------------
+      await t.test('localhost renders distinct non-overlapping side & bottom mock ads and collapses cleanly on small viewports', async () => {
+        await withGamePage(
+          async ({ page, baseUrl }) => {
+            const externalRequests: string[] = [];
+            page.on('request', (req) => {
+              const url = req.url();
+              if (!url.startsWith(baseUrl) && !url.startsWith('data:') && !url.startsWith('about:')) {
+                externalRequests.push(url);
+              }
+            });
+
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await page.locator('#btn-random-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+            await page.waitForSelector('#ad-slot-side .mock-ad-card', { timeout: 5000 });
+            await page.waitForSelector('#ad-slot-bottom .mock-ad-card', { timeout: 5000 });
+
+            // 1. Desktop Wide (1440x900): both side & bottom mock ads visible, distinct, non-overlapping
+            const desktopLayout = await page.evaluate(() => {
+              const adsApi = (window as unknown as {
+                HighRollerAds: { getMode: () => string; getActiveCreatives: () => Record<string, string> };
+              }).HighRollerAds;
+              const sideRect = document.getElementById('ad-slot-side')!.getBoundingClientRect();
+              const bottomRect = document.getElementById('ad-slot-bottom')!.getBoundingClientRect();
+              const vpRect = document.querySelector('.pov-viewport')!.getBoundingClientRect();
+              const hudRect = document.querySelector('.bottom-hud')!.getBoundingClientRect();
+              const tableRect = document.querySelector('.poker-table-surface')!.getBoundingClientRect();
+              const potsRect = document.getElementById('pots-window')!.getBoundingClientRect();
+              return {
+                mode: adsApi.getMode(),
+                creatives: adsApi.getActiveCreatives(),
+                sideRect: {
+                  left: sideRect.left,
+                  right: sideRect.right,
+                  top: sideRect.top,
+                  bottom: sideRect.bottom,
+                  width: sideRect.width,
+                  height: sideRect.height,
+                },
+                bottomRect: {
+                  left: bottomRect.left,
+                  right: bottomRect.right,
+                  top: bottomRect.top,
+                  bottom: bottomRect.bottom,
+                  width: bottomRect.width,
+                  height: bottomRect.height,
+                },
+                vpRight: vpRect.right,
+                hudBottom: hudRect.bottom,
+                tableRight: tableRect.right,
+                potsRight: potsRect.right,
+                vw: window.innerWidth,
+                vh: window.innerHeight,
+              };
+            });
+
+            assert.equal(desktopLayout.mode, 'mock');
+            assert.ok(desktopLayout.creatives['side'], 'Side mock ad must be populated');
+            assert.ok(desktopLayout.creatives['bottom'], 'Bottom mock ad must be populated');
+            assert.notEqual(
+              desktopLayout.creatives['side'],
+              desktopLayout.creatives['bottom'],
+              'Side and bottom slots must show distinct random mock ads',
+            );
+            assert.ok(desktopLayout.sideRect.width >= 160, 'Side rail must fit 160px skyscraper');
+            assert.ok(desktopLayout.sideRect.left >= desktopLayout.vpRight - 1, 'Side ad must sit strictly outside .pov-viewport');
+            assert.ok(desktopLayout.sideRect.left >= desktopLayout.tableRight - 1, 'Side ad must not overlap poker table');
+            assert.ok(desktopLayout.sideRect.left > desktopLayout.potsRight, 'Side ad must stay clear of Table Pots window');
+            assert.ok(desktopLayout.bottomRect.top >= desktopLayout.hudBottom - 1, 'Bottom ad must sit strictly below .bottom-hud');
+            assert.ok(desktopLayout.bottomRect.bottom <= desktopLayout.vh + 1, 'Bottom ad must stay within viewport');
+            assert.equal(
+              externalRequests.length,
+              0,
+              `Mock mode must make zero external requests, saw: ${externalRequests.join(', ')}`,
+            );
+
+            // Clicking a mock ad shows non-blocking toast without navigating or disrupting gameplay
+            const urlBeforeClick = page.url();
+            await page.locator('#ad-slot-bottom .mock-ad-card').click();
+            await page.waitForSelector('#mock-ad-toast.visible', { timeout: 3000 });
+            assert.equal(page.url(), urlBeforeClick);
+            const toastText = (await page.locator('#mock-ad-toast').textContent()) || '';
+            assert.match(toastText, /Mock Ad Preview \(localhost\)/);
+
+            // 2. Mobile Portrait (390x844): side rail hidden, compact bottom banner visible below HUD
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.waitForTimeout(120);
+            const mobileLayout = await page.evaluate(() => {
+              const sideDisplay = getComputedStyle(document.getElementById('ad-slot-side')!).display;
+              const bottomEl = document.getElementById('ad-slot-bottom')!;
+              const bottomFrame = bottomEl.querySelector('.ad-unit-frame')!.getBoundingClientRect();
+              const bottomRect = bottomEl.getBoundingClientRect();
+              const hudRect = document.querySelector('.bottom-hud')!.getBoundingClientRect();
+              const foldRect = document
+                .querySelector('#action-buttons-group button[data-choice-id="fold"]')!
+                .getBoundingClientRect();
+              return {
+                sideDisplay,
+                bottomDisplay: getComputedStyle(bottomEl).display,
+                bottomTop: bottomRect.top,
+                bottomBottom: bottomRect.bottom,
+                bottomFrameH: bottomFrame.height,
+                hudBottom: hudRect.bottom,
+                foldBottom: foldRect.bottom,
+                vh: window.innerHeight,
+              };
+            });
+            assert.equal(mobileLayout.sideDisplay, 'none', 'Side ad rail must hide on mobile portrait');
+            assert.notEqual(
+              mobileLayout.bottomDisplay,
+              'none',
+              'Compact bottom ad banner should remain visible on mobile portrait',
+            );
+            assert.ok(
+              mobileLayout.bottomFrameH <= 52,
+              `Mobile bottom banner should be ~50px tall, got ${mobileLayout.bottomFrameH}`,
+            );
+            assert.ok(mobileLayout.bottomTop >= mobileLayout.hudBottom - 1, 'Mobile bottom ad must sit below HUD');
+            assert.ok(mobileLayout.foldBottom <= mobileLayout.bottomTop + 1, 'Fold button must stay above mobile bottom ad');
+            assert.ok(mobileLayout.bottomBottom <= mobileLayout.vh + 1, 'Mobile bottom ad must stay onscreen');
+
+            // 3. Short Landscape (844x390): BOTH ad slots collapse cleanly
+            await page.setViewportSize({ width: 844, height: 390 });
+            await page.waitForTimeout(120);
+            const landscapeDisplays = await page.evaluate(() => ({
+              side: getComputedStyle(document.getElementById('ad-slot-side')!).display,
+              bottom: getComputedStyle(document.getElementById('ad-slot-bottom')!).display,
+            }));
+            assert.equal(landscapeDisplays.side, 'none', 'Side ad must hide on short landscape');
+            assert.equal(landscapeDisplays.bottom, 'none', 'Bottom ad must hide on short landscape');
+
+            // 4. ?ads=off override hides all slots cleanly
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await page.goto(`${baseUrl}/?ads=off`, { waitUntil: 'domcontentloaded' });
+            await page.waitForFunction(() => {
+              const api = (window as unknown as { HighRollerAds?: { getMode: () => string } }).HighRollerAds;
+              return api?.getMode() === 'disabled';
+            });
+            const offState = await page.evaluate(() => ({
+              sideHidden: document.getElementById('ad-slot-side')!.hidden,
+              bottomHidden: document.getElementById('ad-slot-bottom')!.hidden,
+            }));
+            assert.equal(offState.sideHidden, true);
+            assert.equal(offState.bottomHidden, true);
+          },
+          { turnSpeed: 0.02, engineOptions: { random: () => 0.5 } },
         );
       });
     } finally {
