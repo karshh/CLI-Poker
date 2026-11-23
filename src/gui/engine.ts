@@ -991,7 +991,7 @@ export class PokerGameEngine {
         if (betCost <= 0) {
           throw new Error('Cannot bet or raise right now; please check, call, or fold.');
         }
-        const isRaise = toCall > 0;
+        const isRaise = toCall > 0 || this.currentStreetHighBet > 0;
         const isAllIn = this.playerChips - betCost === 0;
         this.pot += betCost;
         this.playerChips -= betCost;
@@ -1008,7 +1008,9 @@ export class PokerGameEngine {
 
         this.lastAction = { actor: 'player', action: 'bet', amount: betCost };
         const actionDesc = isAllIn
-          ? `You go all-in for $${betCost}.`
+          ? isRaise
+            ? `You raise all-in to $${this.playerStreetContribution} (+$${betCost}).`
+            : `You go all-in for $${betCost}.`
           : isRaise
             ? `You raise to $${this.playerStreetContribution} (+$${betCost}).`
             : `You bet $${betCost}.`;
@@ -1355,6 +1357,7 @@ export class PokerGameEngine {
     const canBet = !this.streetHasRaise && opp.chips > 0 && this.countFundedActiveSeats() > 1;
     const decision = canBet ? decideAction(this.mode, opp.cards, this.board, false, this.random) : 'check';
     if (decision === 'bet' && canBet) {
+      const isRaise = this.currentStreetHighBet > 0;
       const actualBet = Math.min(opp.chips, streetBet);
       opp.chips -= actualBet;
       opp.handContribution += actualBet;
@@ -1363,10 +1366,24 @@ export class PokerGameEngine {
       this.currentStreetHighBet = opp.streetContribution;
       this.streetHasRaise = true;
       this.currentBettorName = opp.profile.name;
-      opp.lastAction = opp.chips === 0 ? `All-in $${actualBet}` : `Bets $${actualBet}`;
+      opp.lastAction =
+        opp.chips === 0
+          ? isRaise
+            ? `All-in to $${opp.streetContribution}`
+            : `All-in $${actualBet}`
+          : isRaise
+            ? `Raises to $${opp.streetContribution}`
+            : `Bets $${actualBet}`;
       opp.reaction = 'confident';
-      opp.speech = opp.profile.betLine(actualBet);
-      this.narrative.push({ speaker: opp.profile.shortName, text: `Bets $${actualBet}.` });
+      opp.speech = opp.profile.betLine(isRaise ? opp.streetContribution : actualBet);
+      this.narrative.push({
+        speaker: opp.profile.shortName,
+        text: isRaise
+          ? opp.chips === 0
+            ? `Raises all-in to $${opp.streetContribution} (+$${actualBet}).`
+            : `Raises to $${opp.streetContribution}.`
+          : `Bets $${actualBet}.`,
+      });
       if (recordEvents) this.recordTurnEvent(opp, 'bet', actualBet);
       this.streetActionQueue = this.buildStreetOrder((seatIndex + 1) % 5).filter((s) => s !== seatIndex);
     } else {
@@ -2074,8 +2091,16 @@ export class PokerGameEngine {
       const betCost = this.getLegalPlayerBetOrRaiseCost(streetBet);
       const choices: PromptChoice[] = [{ id: 'check', label: 'Check', key: 'C', variant: 'primary' }];
       if (betCost > 0) {
-        const isAllIn = this.playerChips <= betCost;
-        const betLabel = isAllIn ? `All-in $${betCost}` : `Bet $${betCost}`;
+        const isRaise = this.currentStreetHighBet > 0;
+        const isAllIn = betCost >= this.playerChips;
+        const raiseTarget = this.playerStreetContribution + betCost;
+        const betLabel = isRaise
+          ? isAllIn
+            ? `All-in to $${raiseTarget} (+$${betCost})`
+            : `Raise to $${raiseTarget} (+$${betCost})`
+          : isAllIn
+            ? `All-in $${betCost}`
+            : `Bet $${betCost}`;
         choices.push({ id: 'bet', label: betLabel, key: 'B', variant: 'default' });
       }
       choices.push({ id: 'fold', label: 'Fold', key: 'F', variant: 'danger' });

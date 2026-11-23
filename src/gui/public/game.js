@@ -1319,7 +1319,7 @@
     const lower = actionText.toLowerCase();
     if (lower.includes('fold')) return 'badge-fold';
     if (lower.includes('win')) return 'badge-win';
-    if (lower.includes('bet')) return 'badge-bet';
+    if (lower.includes('bet') || lower.includes('raise')) return 'badge-bet';
     if (lower.includes('call')) return 'badge-call';
     if (lower.includes('tie')) return 'badge-bet';
     return 'badge-check';
