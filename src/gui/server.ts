@@ -19,8 +19,95 @@ const ALLOWED_STATIC_ASSETS: Readonly<Record<string, BundledAsset>> = {
   '/': { file: 'index.html', contentType: 'text/html; charset=utf-8', isHtml: true },
   '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8', isHtml: true },
   '/game.js': { file: 'game.js', contentType: 'application/javascript; charset=utf-8', isHtml: false },
+  '/ads.js': { file: 'ads.js', contentType: 'application/javascript; charset=utf-8', isHtml: false },
   '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', isHtml: false },
 };
+
+const ADSENSE_CLIENT_ID_RE = /^ca-pub-\d{10,20}$/;
+const ADSENSE_SLOT_ID_RE = /^\d{6,20}$/;
+
+export interface AdSlotIds {
+  side: string | null;
+  bottom: string | null;
+}
+
+export interface AdConfigOptions {
+  enabled?: boolean;
+  clientId?: string | null;
+  slotSide?: string | null;
+  slotBottom?: string | null;
+  adsTxtContent?: string | null;
+}
+
+export interface ResolvedAdConfig {
+  enabled: boolean;
+  provider: 'mock' | 'adsense' | 'disabled';
+  clientId: string | null;
+  slots: AdSlotIds;
+  adsTxtContent: string | null;
+}
+
+export function resolveAdConfig(
+  options: AdConfigOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+  isLoopbackHost = true,
+): ResolvedAdConfig {
+  const envEnabledRaw = env['ADS_ENABLED']?.trim().toLowerCase();
+  const enabledFromEnv =
+    envEnabledRaw === undefined ? undefined : envEnabledRaw !== 'false' && envEnabledRaw !== '0' && envEnabledRaw !== 'off';
+  const enabled = options.enabled ?? enabledFromEnv ?? true;
+
+  const rawAdsTxt = (options.adsTxtContent ?? env['ADS_TXT_CONTENT'] ?? '').trim();
+  const adsTxtContent = rawAdsTxt.length > 0 ? rawAdsTxt : null;
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      provider: 'disabled',
+      clientId: null,
+      slots: { side: null, bottom: null },
+      adsTxtContent,
+    };
+  }
+
+  // On loopback (127.0.0.1 / localhost), always serve non-intrusive random mock ads
+  // so local gameplay and automated tests make zero external ad-network calls.
+  if (isLoopbackHost) {
+    return {
+      enabled: true,
+      provider: 'mock',
+      clientId: null,
+      slots: { side: null, bottom: null },
+      adsTxtContent,
+    };
+  }
+
+  const rawClient = (options.clientId ?? env['ADSENSE_CLIENT_ID'] ?? '').trim();
+  const rawSide = (options.slotSide ?? env['ADSENSE_SLOT_SIDE'] ?? '').trim();
+  const rawBottom = (options.slotBottom ?? env['ADSENSE_SLOT_BOTTOM'] ?? '').trim();
+
+  const validClient = ADSENSE_CLIENT_ID_RE.test(rawClient) ? rawClient : null;
+  const validSide = ADSENSE_SLOT_ID_RE.test(rawSide) ? rawSide : null;
+  const validBottom = ADSENSE_SLOT_ID_RE.test(rawBottom) ? rawBottom : null;
+
+  if (validClient && (validSide || validBottom)) {
+    return {
+      enabled: true,
+      provider: 'adsense',
+      clientId: validClient,
+      slots: { side: validSide, bottom: validBottom },
+      adsTxtContent,
+    };
+  }
+
+  return {
+    enabled: true,
+    provider: 'mock',
+    clientId: null,
+    slots: { side: null, bottom: null },
+    adsTxtContent,
+  };
+}
 
 export function findPublicDir(): string {
   const currentFile = fileURLToPath(import.meta.url);
@@ -48,6 +135,8 @@ export function findPublicDir(): string {
 export interface PokerRequestHandlerOptions {
   /** Returns the actual bound TCP port once listening (enforces exact Host/Origin authority). */
   getBoundPort?: () => number | null;
+  /** Optional AdSense / mock ad configuration overrides. */
+  adConfig?: AdConfigOptions;
 }
 
 function validateHostAuthority(
@@ -208,6 +297,18 @@ export function createPokerRequestHandler(
         return;
       }
 
+      // API: GET /api/ad-config
+      if (req.method === 'GET' && pathname === '/api/ad-config') {
+        const resolved = resolveAdConfig(options.adConfig, process.env, true);
+        sendJson(res, 200, {
+          enabled: resolved.enabled,
+          provider: resolved.provider,
+          clientId: resolved.clientId,
+          slots: resolved.slots,
+        });
+        return;
+      }
+
       // API: POST /api/action (with strict streaming byte cap before buffering/parsing)
       if (req.method === 'POST' && pathname === '/api/action') {
         const declaredLength = req.headers['content-length'];
@@ -306,9 +407,21 @@ export function createPokerRequestHandler(
       return;
     }
 
-    // 4. Static file serving — strictly allowlisted to the 3 bundled GUI assets,
+    // 4. Static file serving — strictly allowlisted to the bundled GUI assets (and optional /ads.txt),
     //    rejecting symlinks and outside targets, with clickjacking CSP on HTML.
     if (req.method === 'GET') {
+      if (pathname === '/ads.txt') {
+        const resolved = resolveAdConfig(options.adConfig, process.env, true);
+        if (resolved.adsTxtContent) {
+          res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Content-Type-Options': 'nosniff',
+          });
+          res.end(`${resolved.adsTxtContent}\n`);
+          return;
+        }
+      }
+
       const asset = ALLOWED_STATIC_ASSETS[pathname];
       if (asset) {
         const safePath = resolveBundledAssetPath(publicDir, asset.file);

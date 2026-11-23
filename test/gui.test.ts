@@ -12,7 +12,7 @@ import {
   type CardData,
   type SerializedGameState,
 } from '../src/gui/engine.js';
-import { createPokerRequestHandler, findPublicDir } from '../src/gui/server.js';
+import { createPokerRequestHandler, findPublicDir, resolveAdConfig } from '../src/gui/server.js';
 
 class MockResponse extends Writable {
   statusCode = 200;
@@ -1466,6 +1466,72 @@ test('HTTP request handler serves state, static files, and handles actions', asy
   assert.ok(jsRes.body.includes('meiling'));
   assert.ok(jsRes.body.includes('tony'));
   assert.ok(jsRes.body.includes('tariq'));
+
+  // 6. GET /ads.js, /api/ad-config, and optional /ads.txt
+  const adsJsRes = await simulateRequest(handler, { method: 'GET', url: '/ads.js' });
+  assert.equal(adsJsRes.statusCode, 200);
+  assert.ok(adsJsRes.body.includes('HighRollerAds'));
+  assert.ok(adsJsRes.body.includes('MOCK_ADS'));
+
+  const adCfgRes = await simulateRequest(handler, { method: 'GET', url: '/api/ad-config' });
+  assert.equal(adCfgRes.statusCode, 200);
+  const adCfg = JSON.parse(adCfgRes.body) as { enabled: boolean; provider: string; clientId: string | null };
+  assert.equal(adCfg.enabled, true);
+  assert.equal(adCfg.provider, 'mock');
+  assert.equal(adCfg.clientId, null);
+
+  // /ads.txt returns 404 when unconfigured, 200 text/plain when configured
+  const missingAdsTxt = await simulateRequest(handler, { method: 'GET', url: '/ads.txt' });
+  assert.equal(missingAdsTxt.statusCode, 404);
+
+  const adsTxtHandler = createPokerRequestHandler(engine, findPublicDir(), {
+    adConfig: { adsTxtContent: 'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0' },
+  });
+  const adsTxtRes = await simulateRequest(adsTxtHandler, { method: 'GET', url: '/ads.txt' });
+  assert.equal(adsTxtRes.statusCode, 200);
+  assert.match(String(adsTxtRes.headers['content-type']), /^text\/plain/);
+  assert.ok(adsTxtRes.body.includes('pub-1234567890123456'));
+});
+
+test('resolveAdConfig enforces mock mode on loopback, validates AdSense IDs on public hosts, and supports disabling', () => {
+  // Loopback always stays in mock mode even if AdSense env vars are provided
+  const loopbackCfg = resolveAdConfig(
+    {},
+    {
+      ADSENSE_CLIENT_ID: 'ca-pub-1234567890123456',
+      ADSENSE_SLOT_SIDE: '1111111111',
+      ADSENSE_SLOT_BOTTOM: '2222222222',
+    },
+    true,
+  );
+  assert.equal(loopbackCfg.enabled, true);
+  assert.equal(loopbackCfg.provider, 'mock');
+  assert.equal(loopbackCfg.clientId, null);
+
+  // Non-loopback host with valid publisher + slot IDs enables AdSense
+  const prodCfg = resolveAdConfig(
+    {},
+    {
+      ADSENSE_CLIENT_ID: 'ca-pub-1234567890123456',
+      ADSENSE_SLOT_SIDE: '1111111111',
+      ADSENSE_SLOT_BOTTOM: '2222222222',
+    },
+    false,
+  );
+  assert.equal(prodCfg.enabled, true);
+  assert.equal(prodCfg.provider, 'adsense');
+  assert.equal(prodCfg.clientId, 'ca-pub-1234567890123456');
+  assert.deepEqual(prodCfg.slots, { side: '1111111111', bottom: '2222222222' });
+
+  // Malformed publisher ID is rejected (never injected into AdSense script URL)
+  const badCfg = resolveAdConfig({}, { ADSENSE_CLIENT_ID: 'ca-pub-evil"><script>' }, false);
+  assert.equal(badCfg.provider, 'mock');
+  assert.equal(badCfg.clientId, null);
+
+  // ADS_ENABLED=false disables all ad slots cleanly
+  const disabledCfg = resolveAdConfig({}, { ADS_ENABLED: 'false' }, true);
+  assert.equal(disabledCfg.enabled, false);
+  assert.equal(disabledCfg.provider, 'disabled');
 });
 
 test('GUI card renderer exposes accessible rank+suit names, hides mirrored glyphs, and labels card backs', async () => {

@@ -35,8 +35,10 @@
       </div>
     </header>
 
-    <!-- 3D POV Casino Table Scene (Encapsulated Strictly Below Top Nav) -->
-    <main class="pov-viewport">
+    <!-- Main Game Shell: 3D POV Table Viewport + Non-Intrusive Right-Side Ad Rail -->
+    <div class="game-shell">
+      <!-- 3D POV Casino Table Scene (Encapsulated Strictly Below Top Nav) -->
+      <main class="pov-viewport">
       <!-- Ceiling & Chandelier -->
       <div class="ceiling">
         <div class="chandelier">
@@ -279,7 +281,24 @@
         </div>
 
       </div>
-    </main>
+      </main>
+
+      <!-- Non-Intrusive Right-Side Skyscraper Ad Rail (Desktop >= 1280px, hidden on compact/mobile/landscape) -->
+      <aside
+        id="ad-slot-side"
+        class="ad-slot ad-slot-side"
+        data-ad-position="side"
+        data-ad-format="skyscraper"
+        role="complementary"
+        aria-label="Sponsored Advertisement (Side)"
+      >
+        <div class="ad-slot-header">
+          <span class="ad-badge" id="ad-badge-side">AD • MOCK</span>
+          <span class="ad-dimensions">160×600</span>
+        </div>
+        <div class="ad-unit-frame" id="ad-frame-side"></div>
+      </aside>
+    </div><!-- /.game-shell -->
 
     <!-- CINEMATIC DIALOGUE & ACTION HUD BAR (At Bottom) -->
     <footer class="bottom-hud">
@@ -356,8 +375,28 @@
       </div>
     </footer>
 
+    <!-- Non-Intrusive Bottom Leaderboard / Mobile Banner Ad Slot (Strictly Below Action HUD) -->
+    <section
+      id="ad-slot-bottom"
+      class="ad-slot ad-slot-bottom"
+      data-ad-position="bottom"
+      data-ad-format="horizontal"
+      role="complementary"
+      aria-label="Sponsored Advertisement (Bottom)"
+    >
+      <div class="ad-slot-header">
+        <span class="ad-badge" id="ad-badge-bottom">AD • MOCK</span>
+        <span class="ad-dimensions">728×90</span>
+      </div>
+      <div class="ad-unit-frame" id="ad-frame-bottom"></div>
+    </section>
+
+    <!-- Subtle Non-Blocking Toast for Localhost Mock Ad Clicks -->
+    <div id="mock-ad-toast" class="mock-ad-toast" role="status" aria-live="polite" hidden></div>
+
   </div>
 
   <script src="game.js"></script>
+  <script src="ads.js"></script>
 </body>
 </html>

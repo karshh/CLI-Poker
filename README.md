@@ -39,6 +39,7 @@ Running `npm run gui` launches a graphical first-person POV (point-of-view) Texa
 - **Cinematic HUD**: Bottom panel displays live narrative dialogue, full win/loss hand comparisons, expandable game log, and action buttons.
 - **Hotkeys**: `C` (Check/Call), `B` (Bet), `F` (Fold), `1`/`2`/`3` (Difficulty), `R` (Random 4 Opponents), `P` (Toggle Table Pots window), `Space` (Play Again), `M` (Mute/Unmute).
 - **Audio**: Built-in procedural Web Audio synthesizer (card whooshes, chip clacks, table knocks, win fanfare).
+- **Non-Intrusive Ad Slots (AdSense Ready)**: Dedicated right-side (`160×600` desktop) and below-HUD bottom (`728×90` desktop / `320×50` mobile, auto-hidden on short landscape viewports) ad placements kept strictly outside the poker felt and action controls. When booted on `localhost` / `127.0.0.1`, slots automatically display distinct random mock ads with zero external network calls (append `?ads=off` or set `ADS_ENABLED=false` to hide). For future hosted deployments, set `ADSENSE_CLIENT_ID`, `ADSENSE_SLOT_SIDE`, `ADSENSE_SLOT_BOTTOM`, and `ADS_TXT_CONTENT` to activate Google AdSense and `/ads.txt`.
 
 ## Docker
 

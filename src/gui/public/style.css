@@ -101,11 +101,11 @@ html, body {
 /* Wall Painting */
 .casino-painting {
   position: absolute;
-  top: 28px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
   width: 220px;
-  height: 36px;
+  height: 32px;
   border: 3px solid var(--gold-dark);
   background: #14070a;
   box-shadow: 0 4px 15px rgba(0,0,0,0.7), inset 0 0 10px rgba(212, 175, 55, 0.3);
@@ -611,13 +611,27 @@ html, body {
 }
 
 /* ==========================================================================
-   3D POV VIEWPORT (FIRST-PERSON TABLE PERSPECTIVE)
+   3D POV VIEWPORT & NON-INTRUSIVE AD RAILS
    ========================================================================== */
+
+.game-shell {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+  z-index: 5;
+}
 
 .pov-viewport {
   position: relative;
   flex: 1;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -1946,6 +1960,338 @@ html, body {
 .log-speaker.You { color: #34d399; }
 .log-speaker.System { color: #f472b6; }
 .log-text { color: #e5e7eb; }
+
+/* ==========================================================================
+   NON-INTRUSIVE AD SLOTS (SIDE SKYSCRAPER + BOTTOM BANNER) & LOCALHOST MOCK ADS
+   ========================================================================== */
+
+.ad-slot {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(10, 6, 9, 0.92), rgba(6, 3, 5, 0.96));
+  z-index: 20;
+}
+.ad-slot[hidden] {
+  display: none !important;
+}
+
+.ad-slot-side {
+  width: 184px;
+  padding: 8px 10px;
+  border-left: 1px solid rgba(212, 175, 55, 0.25);
+  box-shadow: inset 6px 0 18px rgba(0, 0, 0, 0.65);
+  gap: 6px;
+}
+
+.ad-slot-bottom {
+  width: 100%;
+  padding: 5px 16px 6px;
+  border-top: 1px solid rgba(212, 175, 55, 0.28);
+  background: linear-gradient(180deg, rgba(9, 11, 18, 0.97), rgba(5, 6, 10, 0.99));
+  gap: 3px;
+}
+
+.ad-slot-header {
+  width: 100%;
+  max-width: 728px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+.ad-slot-side .ad-slot-header {
+  max-width: 160px;
+}
+
+.ad-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(212, 175, 55, 0.14);
+  border: 1px solid rgba(212, 175, 55, 0.38);
+  color: var(--gold-light);
+  font-size: 8.5px;
+  letter-spacing: 0.9px;
+}
+
+.ad-dimensions {
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+  font-size: 8.5px;
+}
+
+.ad-unit-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.ad-slot-side .ad-unit-frame {
+  width: 160px;
+  height: min(600px, calc(100% - 22px));
+  max-height: 600px;
+}
+
+.ad-slot-bottom .ad-unit-frame {
+  width: min(728px, calc(100vw - 32px));
+  height: 76px;
+}
+
+/* Mock Ad Card Styles (Vertical 160x600 & Horizontal 728x90 / 320x50) */
+.mock-ad-card {
+  --mock-accent: #38bdf8;
+  --mock-bg-from: #0c192c;
+  --mock-bg-to: #07101d;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(255, 215, 0, 0.28);
+  border-left: 3px solid var(--mock-accent);
+  border-radius: 8px;
+  background: linear-gradient(145deg, var(--mock-bg-from) 0%, var(--mock-bg-to) 100%);
+  color: #f8fafc;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.15s ease;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.mock-ad-card:hover {
+  border-color: var(--mock-accent);
+  box-shadow: 0 0 14px rgba(255, 215, 0, 0.22), 0 6px 18px rgba(0, 0, 0, 0.75);
+}
+.mock-ad-card:focus-visible {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 2px;
+}
+
+/* Side Skyscraper Layout (160x600) */
+.mock-ad-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 12px;
+  gap: 10px;
+}
+.mock-ad-side .mock-ad-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.mock-ad-side .mock-ad-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.mock-ad-side .mock-ad-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mock-ad-side .mock-ad-headline {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.3;
+  color: #ffffff;
+}
+.mock-ad-side .mock-ad-copy {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #cbd5e1;
+}
+.mock-ad-side .mock-ad-cta {
+  width: 100%;
+  text-align: center;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--mock-accent);
+  color: #090d16;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+
+/* Bottom Horizontal Leaderboard Layout (728x90 / 320x50) */
+.mock-ad-bottom {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  gap: 12px;
+}
+.mock-ad-bottom .mock-ad-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.mock-ad-bottom .mock-ad-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.mock-ad-bottom .mock-ad-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mock-ad-bottom .mock-ad-headline {
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mock-ad-bottom .mock-ad-copy {
+  font-size: 11px;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mock-ad-bottom .mock-ad-cta {
+  padding: 7px 13px;
+  border-radius: 6px;
+  background: var(--mock-accent);
+  color: #090d16;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mock-ad-brand {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--mock-accent);
+}
+.mock-ad-category {
+  font-size: 9px;
+  font-weight: 700;
+  color: #94a3b8;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.mock-ad-url {
+  font-size: 9.5px;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.mock-ad-bottom .mock-ad-url {
+  display: none;
+}
+
+/* Non-Blocking Localhost Mock Ad Click Toast */
+.mock-ad-toast {
+  position: fixed;
+  bottom: 112px;
+  right: 20px;
+  max-width: 380px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1.5px solid var(--gold-primary);
+  color: #f8fafc;
+  font-size: 11.5px;
+  line-height: 1.35;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.85);
+  z-index: 95;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mock-ad-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Responsive Breakpoints for Ad Slots:
+   - Hide right-side 160x600 rail below 1280px width or below 640px height
+   - Compact 320x50 bottom banner on mobile portrait (<= 767px width)
+   - Hide BOTH ad slots on short landscape viewports (<= 600px height) */
+@media (max-width: 1279px), (max-height: 639px) {
+  .ad-slot-side {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .ad-slot-bottom {
+    padding: 3px 8px 4px;
+    gap: 2px;
+  }
+  .ad-slot-bottom .ad-slot-header {
+    max-width: 320px;
+    font-size: 8px;
+  }
+  .ad-slot-bottom .ad-unit-frame {
+    width: min(320px, calc(100vw - 16px));
+    height: 48px;
+  }
+  .mock-ad-bottom {
+    padding: 5px 10px;
+    gap: 8px;
+  }
+  .mock-ad-bottom .mock-ad-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 15px;
+  }
+  .mock-ad-bottom .mock-ad-copy,
+  .mock-ad-bottom .mock-ad-category {
+    display: none;
+  }
+  .mock-ad-bottom .mock-ad-headline {
+    font-size: 11px;
+  }
+  .mock-ad-bottom .mock-ad-cta {
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+}
+
+@media (max-height: 600px) {
+  .ad-slot-side,
+  .ad-slot-bottom {
+    display: none !important;
+  }
+}
 
 /* Responsive adjustments (tablet & phone viewports down to 360px width) */
 @media (max-height: 780px) {
