@@ -1500,6 +1500,200 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 15: Issue #3 — Closed Table Pots & Log Panels Are Inert, Skipped by Tab & Return Focus on Close
+      // ----------------------------------------------------------------------
+      await t.test('closed Table Pots and Log panels are inert/hidden, skipped by Tab, return focus on close, and restore reachability on reopen', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            // Check initial DOM state on load before starting hand: #history-drawer starts closed and inert
+            const initialPanelState = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const pots = document.getElementById('pots-window') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              const potsBtn = document.getElementById('pots-toggle-btn') as HTMLButtonElement;
+              return {
+                drawerInert: drawer.inert,
+                drawerAriaHidden: drawer.getAttribute('aria-hidden'),
+                drawerVisibility: getComputedStyle(drawer).visibility,
+                logExpanded: logBtn.getAttribute('aria-expanded'),
+                logControls: logBtn.getAttribute('aria-controls'),
+                potsInert: pots.inert,
+                potsAriaHidden: pots.getAttribute('aria-hidden'),
+                potsVisibility: getComputedStyle(pots).visibility,
+                potsExpanded: potsBtn.getAttribute('aria-expanded'),
+                potsControls: potsBtn.getAttribute('aria-controls'),
+              };
+            });
+
+            assert.equal(initialPanelState.drawerInert, true);
+            assert.equal(initialPanelState.drawerAriaHidden, 'true');
+            assert.equal(initialPanelState.drawerVisibility, 'hidden');
+            assert.equal(initialPanelState.logExpanded, 'false');
+            assert.equal(initialPanelState.logControls, 'history-drawer');
+            assert.equal(initialPanelState.potsInert, false);
+            assert.equal(initialPanelState.potsAriaHidden, 'false');
+            assert.equal(initialPanelState.potsVisibility, 'visible');
+            assert.equal(initialPanelState.potsExpanded, 'true');
+            assert.equal(initialPanelState.potsControls, 'pots-window');
+
+            // Start a hand
+            await page.locator('#btn-random-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            const collectTabOrder = async (steps = 20): Promise<Array<{ id: string; inPots: boolean; inDrawer: boolean }>> => {
+              await page.evaluate(() => {
+                (document.activeElement as HTMLElement | null)?.blur?.();
+              });
+              const visited: Array<{ id: string; inPots: boolean; inDrawer: boolean }> = [];
+              for (let i = 0; i < steps; i += 1) {
+                await page.keyboard.press('Tab');
+                const info = await page.evaluate(() => {
+                  const active = document.activeElement;
+                  const pots = document.getElementById('pots-window');
+                  const drawer = document.getElementById('history-drawer');
+                  return {
+                    id: active?.id || active?.tagName || '',
+                    inPots: Boolean(pots && active && pots.contains(active)),
+                    inDrawer: Boolean(drawer && active && drawer.contains(active)),
+                  };
+                });
+                visited.push(info);
+              }
+              return visited;
+            };
+
+            // 1. With #pots-window open and #history-drawer closed: Tab reaches #pots-window-close, NEVER #drawer-close
+            const openPotsTabOrder = await collectTabOrder(18);
+            assert.ok(
+              openPotsTabOrder.some((entry) => entry.id === 'pots-window-close'),
+              `Expected open Table Pots close button to be reachable via Tab, visited: ${openPotsTabOrder.map((v) => v.id).join(', ')}`,
+            );
+            assert.equal(
+              openPotsTabOrder.some((entry) => entry.inDrawer || entry.id === 'drawer-close'),
+              false,
+              'Closed #history-drawer must be skipped by Tab on initial load',
+            );
+
+            // 2. Closing #pots-window via #pots-window-close returns focus to #pots-toggle-btn and makes panel inert/hidden
+            await page.locator('#pots-window-close').click();
+            const afterPotsClose = await page.evaluate(() => {
+              const pots = document.getElementById('pots-window') as HTMLElement;
+              const potsBtn = document.getElementById('pots-toggle-btn') as HTMLButtonElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                potsOpen: pots.classList.contains('open'),
+                potsInert: pots.inert,
+                potsAriaHidden: pots.getAttribute('aria-hidden'),
+                potsVisibility: getComputedStyle(pots).visibility,
+                potsExpanded: potsBtn.getAttribute('aria-expanded'),
+              };
+            });
+            assert.equal(afterPotsClose.activeId, 'pots-toggle-btn');
+            assert.equal(afterPotsClose.potsOpen, false);
+            assert.equal(afterPotsClose.potsInert, true);
+            assert.equal(afterPotsClose.potsAriaHidden, 'true');
+            assert.equal(afterPotsClose.potsVisibility, 'hidden');
+            assert.equal(afterPotsClose.potsExpanded, 'false');
+
+            // 3. With BOTH panels closed: Tab across the entire document NEVER enters #pots-window or #history-drawer
+            const bothClosedTabOrder = await collectTabOrder(24);
+            assert.equal(
+              bothClosedTabOrder.some((entry) => entry.inPots || entry.id === 'pots-window-close'),
+              false,
+              `Closed #pots-window must never receive Tab focus, visited: ${bothClosedTabOrder.map((v) => v.id).join(', ')}`,
+            );
+            assert.equal(
+              bothClosedTabOrder.some((entry) => entry.inDrawer || entry.id === 'drawer-close'),
+              false,
+              `Closed #history-drawer must never receive Tab focus, visited: ${bothClosedTabOrder.map((v) => v.id).join(', ')}`,
+            );
+
+            // 4. Re-open #pots-window via toggle button -> restores reachability; closing via Escape from inside returns focus to #pots-toggle-btn
+            await page.locator('#pots-toggle-btn').click();
+            assert.equal(await page.locator('#pots-toggle-btn').getAttribute('aria-expanded'), 'true');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => (el as HTMLElement).inert), false);
+            await page.locator('#pots-window-close').focus();
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'pots-window-close');
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'pots-toggle-btn');
+
+            // 5. Re-open #pots-window via 'P' hotkey, then close via 'P' hotkey -> returns focus to #pots-toggle-btn
+            await page.keyboard.press('p');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), true);
+            await page.locator('#sound-toggle').focus();
+            await page.keyboard.press('p');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#pots-window').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'pots-toggle-btn');
+
+            // 6. Open #history-drawer -> restores keyboard reachability to #drawer-close; closing via #drawer-close returns focus to #log-toggle-btn
+            await page.locator('#log-toggle-btn').click();
+            const openDrawerState = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              return {
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                visibility: getComputedStyle(drawer).visibility,
+                expanded: logBtn.getAttribute('aria-expanded'),
+              };
+            });
+            assert.equal(openDrawerState.open, true);
+            assert.equal(openDrawerState.inert, false);
+            assert.equal(openDrawerState.ariaHidden, 'false');
+            assert.equal(openDrawerState.visibility, 'visible');
+            assert.equal(openDrawerState.expanded, 'true');
+
+            const openDrawerTabOrder = await collectTabOrder(24);
+            assert.ok(
+              openDrawerTabOrder.some((entry) => entry.id === 'drawer-close'),
+              `Expected open Log drawer close button to be reachable via Tab, visited: ${openDrawerTabOrder.map((v) => v.id).join(', ')}`,
+            );
+
+            await page.locator('#drawer-close').click();
+            const closedDrawerState = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                visibility: getComputedStyle(drawer).visibility,
+                expanded: logBtn.getAttribute('aria-expanded'),
+              };
+            });
+            assert.equal(closedDrawerState.activeId, 'log-toggle-btn');
+            assert.equal(closedDrawerState.open, false);
+            assert.equal(closedDrawerState.inert, true);
+            assert.equal(closedDrawerState.ariaHidden, 'true');
+            assert.equal(closedDrawerState.visibility, 'hidden');
+            assert.equal(closedDrawerState.expanded, 'false');
+
+            // 7. Open #history-drawer again, focus #drawer-close, press Escape -> closes and returns focus to #log-toggle-btn
+            await page.locator('#log-toggle-btn').click();
+            await page.locator('#drawer-close').focus();
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'drawer-close');
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'log-toggle-btn');
+
+            // 8. Toggle #history-drawer open then closed via #log-toggle-btn -> keeps focus on #log-toggle-btn and re-inerts drawer
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), false);
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'log-toggle-btn');
+          },
+          { turnSpeed: 0.02 },
+        );
+      });
     } finally {
       await browser.close();
     }

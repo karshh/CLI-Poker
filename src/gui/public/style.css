@@ -240,6 +240,16 @@ html, body {
   cursor: not-allowed;
   transform: none;
 }
+.nav-pill-btn:focus-visible,
+.icon-btn:focus-visible,
+.log-toggle-btn:focus-visible,
+.pots-window-close:focus-visible,
+.drawer-close:focus-visible,
+.game-btn:focus-visible {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(255, 215, 0, 0.28);
+}
 
 /* ==========================================================================
    HIDABLE TABLE POTS & STACKS FLOATING WINDOW
@@ -260,12 +270,14 @@ html, body {
   opacity: 0;
   transform: translateX(-20px) scale(0.96);
   pointer-events: none;
+  visibility: hidden;
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
 .pots-window.open {
   opacity: 1;
   transform: translateX(0) scale(1);
   pointer-events: auto;
+  visibility: visible;
 }
 
 .pots-window-header {
@@ -1709,12 +1721,14 @@ html, body {
   transform: translateY(120%);
   opacity: 0;
   pointer-events: none;
-  transition: all 0.3s ease;
+  visibility: hidden;
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 .history-drawer.open {
   transform: translateY(0);
   opacity: 1;
   pointer-events: auto;
+  visibility: visible;
 }
 
 .drawer-header {
