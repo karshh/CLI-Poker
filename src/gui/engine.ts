@@ -172,7 +172,9 @@ export interface TurnEvent {
 export interface TurnStartSeatSnapshot {
   chips: number;
   handContribution: number;
+  totalPotWon: number;
   folded: boolean;
+  lastAction: string | null;
 }
 
 export interface PotAwardBreakdown {
@@ -219,6 +221,7 @@ export interface SerializedGameState {
   turnStartPot: number;
   turnStartPlayerChips: number;
   turnStartPlayerContribution: number;
+  turnStartPlayerTotalPotWon: number;
   turnStartPlayerRank: string | null;
   turnStartOpponents: Record<string, TurnStartSeatSnapshot>;
   turnEvents: TurnEvent[];
@@ -568,6 +571,7 @@ export class PokerGameEngine {
   private turnStartPot = 0;
   private turnStartPlayerChips = 0;
   private turnStartPlayerContribution = 0;
+  private turnStartPlayerTotalPotWon = 0;
   private turnStartPlayerRank: string | null = null;
   private turnStartOpponents: Record<string, TurnStartSeatSnapshot> = {};
   private turnEvents: TurnEvent[] = [];
@@ -628,13 +632,16 @@ export class PokerGameEngine {
     this.turnStartPot = this.pot;
     this.turnStartPlayerChips = this.playerChips;
     this.turnStartPlayerContribution = this.playerHandContribution;
+    this.turnStartPlayerTotalPotWon = this.playerTotalPotWon;
     this.turnStartPlayerRank = this.computePlayerHandRank(this.playerCards, this.board);
     const oppSnap: Record<string, TurnStartSeatSnapshot> = {};
     for (const opp of this.opponents) {
       oppSnap[opp.profile.id] = {
         chips: opp.chips,
         handContribution: opp.handContribution,
+        totalPotWon: opp.totalPotWon,
         folded: opp.folded,
+        lastAction: opp.lastAction,
       };
     }
     this.turnStartOpponents = oppSnap;
@@ -820,6 +827,7 @@ export class PokerGameEngine {
       turnStartPot: this.turnStartPot,
       turnStartPlayerChips: this.turnStartPlayerChips,
       turnStartPlayerContribution: this.turnStartPlayerContribution,
+      turnStartPlayerTotalPotWon: this.turnStartPlayerTotalPotWon,
       turnStartPlayerRank: this.turnStartPlayerRank,
       turnStartOpponents: this.turnStartOpponents,
       turnEvents: this.turnEvents,
