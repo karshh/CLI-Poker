@@ -1232,6 +1232,19 @@ export class PokerGameEngine {
     return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
   }
 
+  private formatTieSplitLabel(tiedCount: number): { prefix: string; allClause: string } {
+    if (tiedCount <= 2) {
+      return { prefix: 'Two-way tie', allClause: 'both held' };
+    }
+    const wordByCount: Record<number, string> = {
+      3: 'Three-way',
+      4: 'Four-way',
+      5: 'Five-way',
+    };
+    const wayLabel = wordByCount[tiedCount] ?? `${tiedCount}-way`;
+    return { prefix: `${wayLabel} tie`, allClause: `all ${tiedCount} held` };
+  }
+
   public startNewHand(): void {
     if (this.playerChips <= 0) {
       this.narrative.push({ speaker: 'Dealer', text: 'Rebuy granted! House provides $500 chips.' });
@@ -2085,9 +2098,11 @@ export class PokerGameEngine {
       };
     } else if (pureTieAllPots) {
       const tiedOppNames = this.formatNameList(tiedOpponentsOverall.map((w) => w.name));
+      const tiedCount = tiedOpponentsOverall.length + 1;
+      const { prefix: tiePrefix, allClause } = this.formatTieSplitLabel(tiedCount);
       const explanation = hasSidePots
-        ? `Showdown! Tie with ${tiedOppNames} (${playerRank.name}) — ${potRecap}.`
-        : `Showdown! Tie with ${tiedOppNames} — both held ${playerRank.name}. Pot of $${this.pot} is split!`;
+        ? `Showdown! ${tiePrefix} with ${tiedOppNames} (${playerRank.name}) — ${potRecap}.`
+        : `Showdown! ${tiePrefix} with ${tiedOppNames} — ${allClause} ${playerRank.name}. Pot of $${this.pot} is split!`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -2101,8 +2116,8 @@ export class PokerGameEngine {
           ? allPaidWinners.map((w) => w.name)
           : settlement.bestOverallWinners.map((w) => w.name),
         message: hasSidePots
-          ? `Tie with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
-          : `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
+          ? `${tiePrefix} with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
+          : `${tiePrefix} with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
         bestFiveCards: playerBestFive,
         winningBestFiveCards: playerBestFive,
       };

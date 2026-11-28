@@ -1725,3 +1725,132 @@ test('PokerGameEngine snapshots turnStartPlayerRank and per-event playerRankSnap
     assert.equal(ev.playerRankSnapshot, 'Two pair');
   }
 });
+
+test('PokerGameEngine narrates two-way, three-way, and five-way split pots accurately with consistent dealerSpeech and narrative', () => {
+  // 1. Three-way tie: Player (A♥ 2♥), Elon (3♣ 2♣), Mei-Ling (2♠ 4♥) on board 3♠ 10♣ 5♦ A♠ 4♦ (all 3 make 5-high Straight)
+  //    Seat 0 = You (BTN), Seat 1 = Reginald (SB -> folds $5 dead), Seat 2 = Mei-Ling (BB -> checks/ties),
+  //    Seat 3 = Elon (UTG -> calls/ties), Seat 4 = Buck (CO -> folds)
+  //    Total pot = $5 (SB dead) + $10 (BB) + $10 (UTG) + $10 (BTN) = $35 -> 3-way odd-chip split clockwise after BTN:
+  //    Mei-Ling (BB, seat 2) = $12, Elon (UTG, seat 3) = $12, Player (BTN, seat 0) = $11!
+  const makeThreeWayStraightTieDeck = () => {
+    const cards = [
+      new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+      new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> weak 0.247 < 0.32, folds $5 dead)
+      new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> checks preflop/postflop, 5-high Straight)
+      new Card('♣', '3'), new Card('♣', '2'), // Seat 3: Elon (UTG -> calls preflop, 5-high Straight)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> weak 0.25 < 0.32, folds)
+      new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'), // Flop
+      new Card('♠', 'A'), // Turn
+      new Card('♦', '4'), // River -> 5-high Straight for Player, Elon, and Mei-Ling!
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  let allowElonPreflopCall = false;
+  const threeWayEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => {
+      if (allowElonPreflopCall) {
+        allowElonPreflopCall = false;
+        return 0.1;
+      }
+      return 0.99;
+    },
+    deckFactory: makeThreeWayStraightTieDeck,
+  });
+  threeWayEngine.act('select_opponents:reginald,meiling,elon,buck');
+  allowElonPreflopCall = true;
+  threeWayEngine.act('hard'); // UTG (Elon) calls $10, CO (Buck) folds -> prompts BTN (You)
+  threeWayEngine.act('call'); // BTN calls $10, SB (Reginald) folds $5 dead, BB (Mei-Ling) checks -> Flop (pot = $35)
+  threeWayEngine.act('check'); // Flop
+  threeWayEngine.act('check'); // Turn
+  const threeWayEnd = threeWayEngine.act('check'); // River -> 3-way Straight tie!
+
+  assert.equal(threeWayEnd.stage, 'hand_over');
+  assert.equal(threeWayEnd.pot, 35);
+  assert.equal(threeWayEnd.outcome?.result, 'tie');
+  assert.equal(threeWayEnd.outcome?.playerPayout, 11);
+  assert.equal(threeWayEnd.opponents.find((o) => o.id === 'meiling')?.totalPotWon, 12);
+  assert.equal(threeWayEnd.opponents.find((o) => o.id === 'elon')?.totalPotWon, 12);
+  assert.equal(threeWayEnd.playerTotalPotWon, 11);
+
+  const lastThreeWayNarrative = threeWayEnd.narrative[threeWayEnd.narrative.length - 1]?.text ?? '';
+  assert.equal(threeWayEnd.dealerSpeech, lastThreeWayNarrative, 'Dealer bubble and history must match');
+  assert.match(threeWayEnd.dealerSpeech, /Three-way tie with Madame Mei-Ling & Elon Musk — all 3 held Straight/);
+  assert.doesNotMatch(threeWayEnd.dealerSpeech, /\bboth\b/i, 'Three-way tie must never say "both"');
+  assert.match(threeWayEnd.outcome?.message ?? '', /Three-way tie with Madame Mei-Ling & Elon Musk \(Straight\)/);
+
+  // 2. Two-way tie: Player (BTN) & Buck (BB) split $25 pot -> "Two-way tie" and "both held"
+  const makeTwoWayTieDeck = () => {
+    const cards = [
+      new Card('♥', '4'), new Card('♣', '8'), // Player (BTN)
+      new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> folds $5)
+      new Card('♦', '4'), new Card('♠', '8'), // Seat 2: Buck (BB -> ties on board)
+      new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (UTG -> folds)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (CO -> folds)
+      new Card('♠', 'A'), new Card('♦', 'K'), new Card('♣', 'Q'), // Flop
+      new Card('♥', 'J'), // Turn
+      new Card('♠', '9'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const twoWayEngine = new PokerGameEngine({
+    initialPlayerChips: 500,
+    initialOpponentChips: 500,
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeTwoWayTieDeck,
+  });
+  twoWayEngine.act('select_opponents:reginald,buck,elon,tony');
+  twoWayEngine.act('hard');
+  twoWayEngine.act('call');
+  twoWayEngine.act('check');
+  twoWayEngine.act('check');
+  const twoWayEnd = twoWayEngine.act('check');
+
+  assert.equal(twoWayEnd.outcome?.result, 'tie');
+  assert.equal(twoWayEnd.playerTotalPotWon, 12);
+  assert.equal(twoWayEnd.opponents.find((o) => o.id === 'buck')?.totalPotWon, 13);
+  const lastTwoWayNarrative = twoWayEnd.narrative[twoWayEnd.narrative.length - 1]?.text ?? '';
+  assert.equal(twoWayEnd.dealerSpeech, lastTwoWayNarrative);
+  assert.match(twoWayEnd.dealerSpeech, /Two-way tie with "Big Oil" Buck — both held High card/);
+  assert.match(twoWayEnd.outcome?.message ?? '', /Two-way tie with "Big Oil" Buck \(High card\)/);
+
+  // 3. Five-way tie: board plays Broadway straight A-K-Q-J-10 -> "Five-way tie" and "all 5 held Straight"
+  const makeFiveWayTieDeck = () => {
+    const cards = [
+      new Card('♣', '2'), new Card('♦', '3'),
+      new Card('♥', '2'), new Card('♠', '3'),
+      new Card('♣', '4'), new Card('♦', '5'),
+      new Card('♥', '4'), new Card('♠', '5'),
+      new Card('♣', '6'), new Card('♦', '7'),
+      new Card('♠', 'A'), new Card('♦', 'K'), new Card('♣', 'Q'),
+      new Card('♥', 'J'),
+      new Card('♠', '10'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const fiveWayEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+    deckFactory: makeFiveWayTieDeck,
+  });
+  fiveWayEngine.act('select_opponents:reginald,buck,elon,tony');
+  fiveWayEngine.act('easy');
+  fiveWayEngine.act('call');
+  fiveWayEngine.act('check');
+  fiveWayEngine.act('check');
+  const fiveWayEnd = fiveWayEngine.act('check');
+
+  assert.equal(fiveWayEnd.outcome?.result, 'tie');
+  assert.equal(fiveWayEnd.pot, 50);
+  assert.equal(fiveWayEnd.playerTotalPotWon, 10);
+  const lastFiveWayNarrative = fiveWayEnd.narrative[fiveWayEnd.narrative.length - 1]?.text ?? '';
+  assert.equal(fiveWayEnd.dealerSpeech, lastFiveWayNarrative);
+  assert.match(fiveWayEnd.dealerSpeech, /Five-way tie with .* — all 5 held Straight/);
+  assert.doesNotMatch(fiveWayEnd.dealerSpeech, /\bboth\b/i);
+});
