@@ -1690,4 +1690,36 @@ test('PokerGameEngine turnStartOpponents snapshots new-hand blind badges and cle
   assert.equal(h2Start.turnStartOpponents['buck']?.lastAction, 'SB $5');
   assert.equal(h2Start.turnStartOpponents['elon']?.lastAction, 'BB $10');
   assert.equal(h2Start.turnStartOpponents['tony']?.lastAction, null);
+
+  // Verify turnStartPlayerTotalPotWon and turnStartOpponents[*].totalPotWon stay at pre-settlement values during River settlement playback
+  const makeRiverSplitDeck = () => {
+    const cards = [
+      new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+      new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> folds $5)
+      new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> 5-high Straight)
+      new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> calls $10, bets $40 on River)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> folds)
+      new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'),
+      new Card('♠', 'A'),
+      new Card('♦', '4'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+  const riverEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeRiverSplitDeck,
+  });
+  riverEngine.act('select_opponents:reginald,meiling,elon,buck');
+  riverEngine.act('hard');
+  riverEngine.act('call');
+  riverEngine.act('check');
+  riverEngine.act('check');
+  const riverEnd = riverEngine.act('call'); // Player calls $40; Mei-Ling still acts before showdown!
+  assert.equal(riverEnd.stage, 'hand_over');
+  assert.ok(riverEnd.turnEvents.length > 0, 'Expected Mei-Ling River turnEvent before settlement');
+  assert.equal(riverEnd.turnStartPlayerTotalPotWon, 0, 'turnStartPlayerTotalPotWon must stay pre-settlement ($0)');
+  assert.equal(riverEnd.turnStartOpponents['meiling']?.totalPotWon, 0);
+  assert.equal(riverEnd.turnStartOpponents['elon']?.totalPotWon, 0);
+  assert.equal(riverEnd.playerTotalPotWon, 51, 'Settled playerTotalPotWon is $51');
 });
