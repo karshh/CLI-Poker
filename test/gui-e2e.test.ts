@@ -3391,6 +3391,81 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 18: Issue #27 — Fixed-Limit Felt Copy & Pre-Deal Rules Cue at Desktop and Narrow Widths
+      // ----------------------------------------------------------------------
+      for (const vp of [
+        { width: 1280, height: 800 },
+        { width: 360, height: 740 },
+      ]) {
+        await t.test(
+          `felt copy and pre-deal fixed-limit rules cue are accurate and visible at ${vp.width}x${vp.height}`,
+          async () => {
+            await withGamePage(
+              async ({ page }) => {
+                // 1. Felt subtitle reflects Fixed-Limit rules (never "NO LIMIT")
+                const feltSub = (await page.locator('.table-center-logo .logo-sub').textContent())?.trim() || '';
+                assert.equal(feltSub, 'FIXED-LIMIT CASINO LOUNGE');
+                assert.doesNotMatch(feltSub, /NO LIMIT/i);
+
+                // 2. Opponent picker dialog shows the fixed-limit rules cue before the first deal
+                const modalCue = await page.evaluate(() => {
+                  const el = document.getElementById('modal-rules-cue');
+                  if (!el) return null;
+                  const r = el.getBoundingClientRect();
+                  return {
+                    text: el.textContent?.trim() || '',
+                    visible: r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden',
+                    left: r.left,
+                    right: r.right,
+                    vw: window.innerWidth,
+                  };
+                });
+                assert.ok(modalCue && modalCue.visible, `Expected #modal-rules-cue visible at ${vp.width}x${vp.height}`);
+                assert.ok(modalCue.left >= 0 && modalCue.right <= modalCue.vw + 1);
+                assert.match(modalCue.text, /\$5\/\$10 blinds/);
+                assert.match(modalCue.text, /\$10 Pre-flop \/ \$20 Flop \/ \$30 Turn \/ \$40 River/);
+                assert.match(modalCue.text, /One bet or raise per street/);
+
+                // 3. After choosing opponents (select_mode, still before first deal), #predeal-rules-cue is visible and unclipped
+                await page.locator('#btn-random-opponents').click();
+                await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+                await waitForPromptReady(page, 'Choose table difficulty:');
+
+                const predealCue = await page.evaluate(() => {
+                  const el = document.getElementById('predeal-rules-cue');
+                  if (!el) return null;
+                  const r = el.getBoundingClientRect();
+                  return {
+                    text: el.textContent?.trim() || '',
+                    hidden: el.hidden,
+                    visible: r.width > 0 && r.height > 0,
+                    left: r.left,
+                    right: r.right,
+                    vw: window.innerWidth,
+                  };
+                });
+                assert.ok(predealCue && !predealCue.hidden && predealCue.visible);
+                assert.ok(predealCue.left >= 0 && predealCue.right <= predealCue.vw + 1);
+                assert.match(predealCue.text, /\$5\/\$10 blinds/);
+                assert.match(predealCue.text, /\$10 Pre-flop \/ \$20 Flop \/ \$30 Turn \/ \$40 River/);
+                assert.match(predealCue.text, /One bet or raise per street/);
+
+                // 4. Once Hand 1 is dealt, #predeal-rules-cue hides cleanly
+                await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+                await waitForPromptReady(page, 'Pre-flop');
+                assert.equal(await page.locator('#predeal-rules-cue').isHidden(), true);
+              },
+              {
+                turnSpeed: 0.02,
+                viewport: vp,
+                engineOptions: { random: () => 0.5 },
+              },
+            );
+          },
+        );
+      }
     } finally {
       await browser.close();
     }

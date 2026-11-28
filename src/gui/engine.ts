@@ -183,6 +183,14 @@ export interface PotAwardBreakdown {
   winners: { id: string; name: string; amount: number }[];
 }
 
+export interface TableBettingRules {
+  limitType: 'fixed';
+  smallBlind: number;
+  bigBlind: number;
+  streetBets: { street: string; bet: number }[];
+  maxBetsOrRaisesPerStreet: number;
+}
+
 export interface SessionSummary {
   handsPlayed: number;
   handsWon: number;
@@ -207,6 +215,7 @@ export interface SerializedGameState {
   playerPositionLabel: string;
   smallBlind: number;
   bigBlind: number;
+  bettingRules: TableBettingRules;
   currentBet: number;
   pot: number;
   turnStartPot: number;
@@ -806,6 +815,13 @@ export class PokerGameEngine {
       playerPositionLabel: TABLE_POSITION_LABELS[playerPosition],
       smallBlind: this.smallBlind,
       bigBlind: this.bigBlind,
+      bettingRules: {
+        limitType: 'fixed',
+        smallBlind: this.smallBlind,
+        bigBlind: this.bigBlind,
+        streetBets: STREETS.map((s) => ({ street: s.name, bet: s.bet })),
+        maxBetsOrRaisesPerStreet: 1,
+      },
       currentBet: effectiveCurrentBet,
       pot: this.pot,
       turnStartPot: this.turnStartPot,
