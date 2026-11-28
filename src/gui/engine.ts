@@ -155,6 +155,7 @@ export interface TurnEvent {
   shortName: OpponentShortName;
   streetName: string;
   boardSnapshot: CardData[];
+  playerRankSnapshot?: string | null;
   thinkingSpeech: string;
   action: 'check' | 'bet' | 'call' | 'fold';
   amount?: number;
@@ -218,6 +219,7 @@ export interface SerializedGameState {
   turnStartPot: number;
   turnStartPlayerChips: number;
   turnStartPlayerContribution: number;
+  turnStartPlayerRank: string | null;
   turnStartOpponents: Record<string, TurnStartSeatSnapshot>;
   turnEvents: TurnEvent[];
   playerChips: number;
@@ -566,6 +568,7 @@ export class PokerGameEngine {
   private turnStartPot = 0;
   private turnStartPlayerChips = 0;
   private turnStartPlayerContribution = 0;
+  private turnStartPlayerRank: string | null = null;
   private turnStartOpponents: Record<string, TurnStartSeatSnapshot> = {};
   private turnEvents: TurnEvent[] = [];
 
@@ -599,10 +602,33 @@ export class PokerGameEngine {
     return [0, 1, 2, 3, 4].map((offset) => (startSeatIndex + offset) % 5);
   }
 
+  private computePlayerHandRank(
+    playerCards: readonly [Card, Card] | null,
+    board: readonly Card[],
+  ): string | null {
+    if (!playerCards) return null;
+    const cardsToEval = [...playerCards, ...board];
+    if (cardsToEval.length >= 5) {
+      return evaluateHand(cardsToEval).name;
+    }
+    if (playerCards[0] && playerCards[1]) {
+      if (playerCards[0].value === playerCards[1].value) {
+        return `Pocket Pair of ${playerCards[0].value}s`;
+      }
+      return `High Card ${
+        playerCards[0].getNumericValue() > playerCards[1].getNumericValue()
+          ? playerCards[0].value
+          : playerCards[1].value
+      }`;
+    }
+    return null;
+  }
+
   private captureTurnStartSnapshot(): void {
     this.turnStartPot = this.pot;
     this.turnStartPlayerChips = this.playerChips;
     this.turnStartPlayerContribution = this.playerHandContribution;
+    this.turnStartPlayerRank = this.computePlayerHandRank(this.playerCards, this.board);
     const oppSnap: Record<string, TurnStartSeatSnapshot> = {};
     for (const opp of this.opponents) {
       oppSnap[opp.profile.id] = {
@@ -740,23 +766,7 @@ export class PokerGameEngine {
   }
 
   public getState(): SerializedGameState {
-    let playerCurrentRank: string | null = null;
-    if (this.playerCards) {
-      const cardsToEval = [...this.playerCards, ...this.board];
-      if (cardsToEval.length >= 5) {
-        playerCurrentRank = evaluateHand(cardsToEval).name;
-      } else if (this.playerCards[0] && this.playerCards[1]) {
-        if (this.playerCards[0].value === this.playerCards[1].value) {
-          playerCurrentRank = `Pocket Pair of ${this.playerCards[0].value}s`;
-        } else {
-          playerCurrentRank = `High Card ${
-            this.playerCards[0].getNumericValue() > this.playerCards[1].getNumericValue()
-              ? this.playerCards[0].value
-              : this.playerCards[1].value
-          }`;
-        }
-      }
-    }
+    const playerCurrentRank = this.computePlayerHandRank(this.playerCards, this.board);
 
     const serializedOpponents = this.opponents.map((opp, idx) => this.serializeOpponent(opp, idx));
     const primaryIdx = this.opponents[2] ? 2 : 0;
@@ -810,6 +820,7 @@ export class PokerGameEngine {
       turnStartPot: this.turnStartPot,
       turnStartPlayerChips: this.turnStartPlayerChips,
       turnStartPlayerContribution: this.turnStartPlayerContribution,
+      turnStartPlayerRank: this.turnStartPlayerRank,
       turnStartOpponents: this.turnStartOpponents,
       turnEvents: this.turnEvents,
       playerChips: this.playerChips,
@@ -877,6 +888,7 @@ export class PokerGameEngine {
       shortName: opp.profile.shortName,
       streetName: STREETS[this.streetIndex]?.name ?? 'Showdown',
       boardSnapshot: this.board.map(cardToData),
+      playerRankSnapshot: this.computePlayerHandRank(this.playerCards, this.board),
       thinkingSpeech: this.pickThinkingLine(opp),
       action,
       ...(amount !== undefined ? { amount } : {}),
@@ -1234,6 +1246,19 @@ export class PokerGameEngine {
     if (names.length === 1) return names[0]!;
     if (names.length === 2) return `${names[0]} & ${names[1]}`;
     return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+  }
+
+  private formatTieSplitLabel(tiedCount: number): { prefix: string; allClause: string } {
+    if (tiedCount <= 2) {
+      return { prefix: 'Two-way tie', allClause: 'both held' };
+    }
+    const wordByCount: Record<number, string> = {
+      3: 'Three-way',
+      4: 'Four-way',
+      5: 'Five-way',
+    };
+    const wayLabel = wordByCount[tiedCount] ?? `${tiedCount}-way`;
+    return { prefix: `${wayLabel} tie`, allClause: `all ${tiedCount} held` };
   }
 
   public startNewHand(): void {
@@ -2089,9 +2114,11 @@ export class PokerGameEngine {
       };
     } else if (pureTieAllPots) {
       const tiedOppNames = this.formatNameList(tiedOpponentsOverall.map((w) => w.name));
+      const tiedCount = tiedOpponentsOverall.length + 1;
+      const { prefix: tiePrefix, allClause } = this.formatTieSplitLabel(tiedCount);
       const explanation = hasSidePots
-        ? `Showdown! Tie with ${tiedOppNames} (${playerRank.name}) — ${potRecap}.`
-        : `Showdown! Tie with ${tiedOppNames} — both held ${playerRank.name}. Pot of $${this.pot} is split!`;
+        ? `Showdown! ${tiePrefix} with ${tiedOppNames} (${playerRank.name}) — ${potRecap}.`
+        : `Showdown! ${tiePrefix} with ${tiedOppNames} — ${allClause} ${playerRank.name}. Pot of $${this.pot} is split!`;
       this.dealerSpeech = explanation;
       this.narrative.push({ speaker: 'Dealer', text: explanation });
       this.outcome = {
@@ -2105,8 +2132,8 @@ export class PokerGameEngine {
           ? allPaidWinners.map((w) => w.name)
           : settlement.bestOverallWinners.map((w) => w.name),
         message: hasSidePots
-          ? `Tie with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
-          : `Tie with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
+          ? `${tiePrefix} with ${tiedOppNames} (${playerRank.name}): ${potRecap}.`
+          : `${tiePrefix} with ${tiedOppNames} (${playerRank.name})! Pot of $${this.pot} split.`,
         bestFiveCards: playerBestFive,
         winningBestFiveCards: playerBestFive,
       };
