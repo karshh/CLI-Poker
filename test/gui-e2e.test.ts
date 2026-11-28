@@ -3065,6 +3065,99 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 17: Issue #26 — Escape Closes Game History Directly From Focused Log Trigger
+      // ----------------------------------------------------------------------
+      await t.test('Escape closes Game History immediately from focused Log button while preserving Table Pots and opponent picker Escape behavior', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('#btn-random-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // 1. Focus #log-toggle-btn, open Game History via Enter (without tabbing inside), and press Escape
+            await page.locator('#log-toggle-btn').focus();
+            await page.keyboard.press('Enter');
+            const openedFromTrigger = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                expanded: logBtn.getAttribute('aria-expanded'),
+              };
+            });
+            assert.equal(openedFromTrigger.activeId, 'log-toggle-btn');
+            assert.equal(openedFromTrigger.open, true);
+            assert.equal(openedFromTrigger.inert, false);
+            assert.equal(openedFromTrigger.ariaHidden, 'false');
+            assert.equal(openedFromTrigger.expanded, 'true');
+
+            await page.keyboard.press('Escape');
+            const closedFromTrigger = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              const pots = document.getElementById('pots-window') as HTMLElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                expanded: logBtn.getAttribute('aria-expanded'),
+                potsStillOpen: pots.classList.contains('open'),
+              };
+            });
+            assert.equal(closedFromTrigger.open, false, 'Escape from focused Log button must close Game History');
+            assert.equal(closedFromTrigger.inert, true);
+            assert.equal(closedFromTrigger.ariaHidden, 'true');
+            assert.equal(closedFromTrigger.expanded, 'false');
+            assert.equal(closedFromTrigger.activeId, 'log-toggle-btn');
+            assert.equal(closedFromTrigger.potsStillOpen, true, 'Closing Game History must leave Table Pots open');
+
+            // 2. Open via click on #log-toggle-btn and press Escape immediately without tabbing into drawer
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.locator('#log-toggle-btn').getAttribute('aria-expanded'), 'false');
+
+            // 3. When BOTH Table Pots and Game History are open:
+            //    - Pressing Escape from inside Table Pots closes Table Pots (focus -> #pots-toggle-btn) and leaves Game History open
+            //    - Pressing Escape from inside Game History then closes Game History and returns focus to #log-toggle-btn
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), true);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+
+            await page.locator('#pots-window-close').focus();
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'pots-toggle-btn');
+
+            await page.locator('#drawer-close').focus();
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'log-toggle-btn');
+
+            // 4. Between hands: when opponent picker dialog is open alongside Game History, Escape dismisses the dialog first
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            await page.locator('#log-toggle-btn').click();
+            await page.locator('#pick-opponents-btn').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay[open]');
+            await page.keyboard.press('Escape');
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+          },
+          { turnSpeed: 0.02 },
+        );
+      });
     } finally {
       await browser.close();
     }
