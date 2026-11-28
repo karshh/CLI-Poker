@@ -1892,6 +1892,26 @@
     });
   }
 
+  function formatPreflopRankFromCards(cards) {
+    if (!Array.isArray(cards) || cards.length < 2) return null;
+    const [first, second] = cards;
+    if (!first || !second || !first.value || !second.value) return null;
+    if (first.value === second.value) {
+      return `Pocket Pair of ${first.value}s`;
+    }
+    return `High Card ${first.numeric > second.numeric ? first.value : second.value}`;
+  }
+
+  function renderPlayerHandRank(rankText, equalCategoryDetail = null) {
+    if (!elPlayerHandRank) return;
+    if (rankText) {
+      const detail = equalCategoryDetail ? ` (${equalCategoryDetail})` : '';
+      elPlayerHandRank.textContent = `Your Hand: ${rankText}${detail}`;
+    } else {
+      elPlayerHandRank.textContent = 'Texas Hold’em';
+    }
+  }
+
   async function playTurnSequenceAndRender(nextState, playerAction) {
     if (Array.isArray(nextState.opponents)) {
       mountOpponentSeats(nextState.opponents);
@@ -1943,6 +1963,13 @@
           ${renderCardHTML(nextState.playerCards[0])}
           ${renderCardHTML(nextState.playerCards[1])}
         `;
+        const preflopRank =
+          typeof nextState.turnStartPlayerRank === 'string' && nextState.turnStartPlayerRank.length > 0
+            ? nextState.turnStartPlayerRank
+            : formatPreflopRankFromCards(nextState.playerCards);
+        renderPlayerHandRank(preflopRank, null);
+      } else {
+        renderPlayerHandRank(null, null);
       }
       (nextState.opponents || []).forEach((opp) => {
         const elCards = document.getElementById(`opp-cards-container-${opp.id}`);
@@ -2034,6 +2061,9 @@
           if (!skipCurrentPlayback) {
             sfx.playCardFlip();
           }
+        }
+        if (typeof event.playerRankSnapshot === 'string' && event.playerRankSnapshot.length > 0) {
+          renderPlayerHandRank(event.playerRankSnapshot, null);
         }
         elDealerBubbleText.textContent = `${event.streetName} dealt! Opponents contest the side pot...`;
         elDealerBubble.classList.add('active');
@@ -2202,15 +2232,10 @@
         <div class="card card-placeholder" id="player-card-2" aria-hidden="true"></div>
       `;
     }
-    if (state.playerCurrentRank) {
-      const detail =
-        state.outcome && state.outcome.result === 'win' && state.outcome.equalCategoryDetail
-          ? ` (${state.outcome.equalCategoryDetail})`
-          : '';
-      elPlayerHandRank.textContent = `Your Hand: ${state.playerCurrentRank}${detail}`;
-    } else {
-      elPlayerHandRank.textContent = 'Texas Hold’em';
-    }
+    renderPlayerHandRank(
+      state.playerCurrentRank,
+      state.outcome && state.outcome.result === 'win' ? state.outcome.equalCategoryDetail : null,
+    );
 
     // Dialogue Narration Panel
     const lastNarrative = state.narrative && state.narrative.length > 0 ? state.narrative[state.narrative.length - 1] : null;
