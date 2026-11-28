@@ -1733,4 +1733,6 @@ test('PokerGameEngine outcome.pots reports per-hand payouts separately from cumu
   const h2Start = engine.act('yes');
   assert.equal(h2Start.outcome, null, 'Next hand clears outcome/current-hand payout');
   assert.equal(h2Start.opponents.find((o) => o.id === 'meiling')?.totalPotWon, 50, 'Session winnings persist into Hand 2');
+  assert.equal(h2Start.turnStartOpponents['meiling']?.totalPotWon, 50, 'turnStartOpponents snapshots pre-turn session winnings');
+  assert.equal(h2Start.turnStartPlayerTotalPotWon, 0);
 });

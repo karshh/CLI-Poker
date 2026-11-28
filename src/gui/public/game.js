@@ -1456,6 +1456,7 @@
     (state.opponents || []).forEach((opp) => {
       const ov = liveOverrides && liveOverrides.opponents ? liveOverrides.opponents[opp.id] : null;
       const inPot = ov && typeof ov.handContribution === 'number' ? ov.handContribution : opp.handContribution || 0;
+      const totalWon = ov && typeof ov.totalPotWon === 'number' ? ov.totalPotWon : opp.totalPotWon || 0;
       const chips = ov && typeof ov.chips === 'number' ? ov.chips : opp.chips;
       const folded = ov && typeof ov.folded === 'boolean' ? ov.folded : opp.folded;
       const thinking = Boolean(ov && ov.thinking);
@@ -1476,7 +1477,7 @@
           </span>
           <span class="pots-val in-pot" data-col="in-pot">$${inPot}</span>
           ${formatHandPayoutCell(opp.id)}
-          <span class="pots-val won" data-col="session-winnings">$${opp.totalPotWon || 0}</span>
+          <span class="pots-val won" data-col="session-winnings">$${totalWon}</span>
           <span class="pots-val stack" data-col="stack">$${chips}</span>
         </div>
       `);
@@ -1486,6 +1487,10 @@
       liveOverrides && typeof liveOverrides.playerHandContribution === 'number'
         ? liveOverrides.playerHandContribution
         : state.playerHandContribution || 0;
+    const playerTotalWon =
+      liveOverrides && typeof liveOverrides.playerTotalPotWon === 'number'
+        ? liveOverrides.playerTotalPotWon
+        : state.playerTotalPotWon || 0;
     const playerChips =
       liveOverrides && typeof liveOverrides.playerChips === 'number' ? liveOverrides.playerChips : state.playerChips;
     const pPos = state.playerPosition || 'BTN';
@@ -1500,7 +1505,7 @@
         </span>
         <span class="pots-val in-pot" data-col="in-pot">$${playerInPot}</span>
         ${formatHandPayoutCell('player')}
-        <span class="pots-val won" data-col="session-winnings">$${state.playerTotalPotWon || 0}</span>
+        <span class="pots-val won" data-col="session-winnings">$${playerTotalWon}</span>
         <span class="pots-val stack" data-col="stack">$${playerChips}</span>
       </div>
     `);
@@ -1990,6 +1995,12 @@
     }
 
     const startPot = typeof nextState.turnStartPot === 'number' ? nextState.turnStartPot : nextState.pot;
+    const prevOppById = {};
+    if (currentState && Array.isArray(currentState.opponents)) {
+      currentState.opponents.forEach((o) => {
+        prevOppById[o.id] = o;
+      });
+    }
     const livePots = {
       pot: startPot,
       playerChips:
@@ -2000,14 +2011,27 @@
         typeof nextState.turnStartPlayerContribution === 'number'
           ? nextState.turnStartPlayerContribution
           : nextState.playerHandContribution || 0,
+      playerTotalPotWon:
+        typeof nextState.turnStartPlayerTotalPotWon === 'number'
+          ? nextState.turnStartPlayerTotalPotWon
+          : currentState && typeof currentState.playerTotalPotWon === 'number'
+            ? currentState.playerTotalPotWon
+            : nextState.playerTotalPotWon || 0,
       opponents: {},
     };
     const snapOpps = nextState.turnStartOpponents || {};
     (nextState.opponents || []).forEach((opp) => {
       const snap = snapOpps[opp.id];
+      const prevOpp = prevOppById[opp.id];
       livePots.opponents[opp.id] = {
         chips: snap ? snap.chips : opp.chips,
         handContribution: snap ? snap.handContribution : opp.handContribution || 0,
+        totalPotWon:
+          snap && typeof snap.totalPotWon === 'number'
+            ? snap.totalPotWon
+            : prevOpp && typeof prevOpp.totalPotWon === 'number'
+              ? prevOpp.totalPotWon
+              : opp.totalPotWon || 0,
         folded: snap ? snap.folded : opp.folded,
         thinking: false,
       };
@@ -2087,9 +2111,11 @@
 
       applyOpponentDecision(event, { suppressSfx: skipCurrentPlayback });
       livePots.pot = event.potAfter;
+      const prevLiveOpp = livePots.opponents[event.opponentId];
       livePots.opponents[event.opponentId] = {
         chips: event.chipsAfter,
         handContribution: event.handContributionAfter,
+        totalPotWon: prevLiveOpp ? prevLiveOpp.totalPotWon : 0,
         folded: event.folded,
         thinking: false,
       };

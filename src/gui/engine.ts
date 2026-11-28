@@ -171,6 +171,7 @@ export interface TurnEvent {
 export interface TurnStartSeatSnapshot {
   chips: number;
   handContribution: number;
+  totalPotWon: number;
   folded: boolean;
 }
 
@@ -209,6 +210,7 @@ export interface SerializedGameState {
   turnStartPot: number;
   turnStartPlayerChips: number;
   turnStartPlayerContribution: number;
+  turnStartPlayerTotalPotWon: number;
   turnStartOpponents: Record<string, TurnStartSeatSnapshot>;
   turnEvents: TurnEvent[];
   playerChips: number;
@@ -557,6 +559,7 @@ export class PokerGameEngine {
   private turnStartPot = 0;
   private turnStartPlayerChips = 0;
   private turnStartPlayerContribution = 0;
+  private turnStartPlayerTotalPotWon = 0;
   private turnStartOpponents: Record<string, TurnStartSeatSnapshot> = {};
   private turnEvents: TurnEvent[] = [];
 
@@ -594,11 +597,13 @@ export class PokerGameEngine {
     this.turnStartPot = this.pot;
     this.turnStartPlayerChips = this.playerChips;
     this.turnStartPlayerContribution = this.playerHandContribution;
+    this.turnStartPlayerTotalPotWon = this.playerTotalPotWon;
     const oppSnap: Record<string, TurnStartSeatSnapshot> = {};
     for (const opp of this.opponents) {
       oppSnap[opp.profile.id] = {
         chips: opp.chips,
         handContribution: opp.handContribution,
+        totalPotWon: opp.totalPotWon,
         folded: opp.folded,
       };
     }
@@ -794,6 +799,7 @@ export class PokerGameEngine {
       turnStartPot: this.turnStartPot,
       turnStartPlayerChips: this.turnStartPlayerChips,
       turnStartPlayerContribution: this.turnStartPlayerContribution,
+      turnStartPlayerTotalPotWon: this.turnStartPlayerTotalPotWon,
       turnStartOpponents: this.turnStartOpponents,
       turnEvents: this.turnEvents,
       playerChips: this.playerChips,

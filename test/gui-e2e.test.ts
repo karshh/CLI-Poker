@@ -2947,31 +2947,19 @@ test(
             ];
             return { draw: () => cards.shift()! };
           }
-          // Hand 2 (BTN=Reginald, SB=Mei-Ling, BB=Elon, UTG=Buck, CO=You):
-          // On hard mode with random=0.99:
-          // - UTG (Buck 7♦ 2♠) folds; CO (You A♥ 2♥) calls $10; BTN (Reginald 7♣ 2♦) folds;
-          // - SB (Mei-Ling 4♥ 2♥ suited -> 0.25 + 0.10 = 0.35 >= 0.32!) calls $5; BB (Elon 3♣ 2♣) checks!
-          // Wait: to make an odd pot ($35), let BTN (Reginald) fold and give someone $5 dead? Wait: SB (Mei-Ling) calls $5 -> total $30!
-          // Better: Hand 2 uses BTN=Reginald(folds), SB=Mei-Ling($5 + $5 = $10), BB=Elon($10), UTG=Buck(folds), CO=You($10) -> $30;
-          // Let's make Hand 2 a $35 odd-chip 3-way split! On Hand 2, if initialButtonSeatIndex=4 on Hand 1 ->
-          // Hand 1: BTN=Buck(4), SB=You(0), BB=Reginald(1), UTG=Mei-Ling(2), CO=Elon(3)
-          // Even simpler: keep initialButtonSeatIndex=4 so Hand 2 has BTN=You(0), SB=Reginald(1 -> folds $5 dead!), BB=Mei-Ling(2), UTG=Elon(3), CO=Buck(4 -> folds)!
-          // Let's check Hand 1 with initialButtonSeatIndex=4:
-          //   BTN=Buck(4), SB=You(0), BB=Reginald(1), UTG=Mei-Ling(2 -> A♠ A♥ raises/calls), CO=Elon(3 -> folds)
-          //   Even easier: Hand 2 is $35 pot with BTN=You(0), SB=Reginald(1 -> folds $5 dead), BB=Mei-Ling(2), UTG=Elon(3 -> 3♣ 2♣ calls $10), CO=Buck(4 -> folds)!
-          //   Total pot = $35 -> Mei-Ling (BB) = $12, Elon (UTG) = $12, Player (BTN) = $11!
-          // And on Hand 1 (initialButtonSeatIndex=4): BTN=Buck(4 -> folds), SB=You(0 -> calls $5), BB=Reginald(1 -> checks), UTG=Mei-Ling(2 -> A♠ A♥ calls $10), CO=Elon(3 -> folds)
-          //   Mei-Ling wins $30 on Hand 1 (Mei-Ling Session Winnings = $30)!
-          //   Then Hand 2 (BTN=You): 3-way split of $35 -> Mei-Ling Hand Payout = $12, Session Winnings = $42; Elon Hand Payout = $12, Session = $12; Player Hand Payout = $11, Session = $11!
+          // Hand 2 (BTN=You, SB=Reginald, BB=Mei-Ling, UTG=Elon, CO=Buck):
+          // All 15 cards are unique. Reginald (3♥ 4♣) folds $5 dead and Buck (2♦ 5♠) folds pre-flop on Hard.
+          // Elon (5♣ 2♣) calls $10 pre-flop and bets $40 on the River when 4♦ completes a 5-high Straight for Player, Elon, and Mei-Ling.
+          // After Player calls $40, Mei-Ling acts last to call $40, settling a $155 three-way split ($52 Mei-Ling, $52 Elon, $51 Player).
           const cards = [
             new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
-            new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> 0.25 < 0.32, folds $5 dead!)
+            new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> 0.247 < 0.32, folds $5 dead)
             new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> checks, 5-high Straight)
-            new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> 0.32 >= 0.32, calls $10, bets $40 on River Straight!)
+            new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> 0.32 >= 0.32, calls $10, bets $40 on River)
             new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> 0.25 < 0.32, folds)
             new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'), // Flop
             new Card('♠', 'A'), // Turn
-            new Card('♦', '4'), // River -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)!
+            new Card('♦', '4'), // River -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)
           ];
           return { draw: () => cards.shift()! };
         };
@@ -3049,8 +3037,69 @@ test(
             await waitForPromptReady(page, 'Turn');
             await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
             await waitForPromptReady(page, 'River');
+
+            const preRiverCall = await readTablePots();
+            const preCallPlayerStack = Number((preRiverCall.bySeat['player']?.stack || '$0').replace('$', ''));
+
+            // Sample Table Pots while Mei-Ling's final River turn is still playing (slow playback temporarily via window override? Wait: turnSpeed is 0.25!)
+            await page.evaluate(() => {
+              const snaps: Array<{
+                thinkingId: string;
+                playerPayout: string;
+                playerSession: string;
+                playerStack: string;
+                meiPayout: string;
+                meiSession: string;
+              }> = [];
+              (window as unknown as { __SPLIT_PLAYBACK_SNAPS__: typeof snaps }).__SPLIT_PLAYBACK_SNAPS__ = snaps;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  const pRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="player"]');
+                  const mRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="meiling"]');
+                  snaps.push({
+                    thinkingId: thinking.getAttribute('data-opp-id') || '',
+                    playerPayout: pRow?.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    playerSession: pRow?.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                    playerStack: pRow?.querySelector('[data-col="stack"]')?.textContent?.trim() || '',
+                    meiPayout: mRow?.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    meiSession: mRow?.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                  });
+                }
+              }, 25);
+              (window as unknown as { __SPLIT_PLAYBACK_TIMER__: ReturnType<typeof setInterval> }).__SPLIT_PLAYBACK_TIMER__ = timer;
+            });
+
             await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await page.waitForSelector('.character-container.is-thinking[data-opp-id="meiling"]', { timeout: 5000 });
             await waitForPromptReady(page, 'Play another hand?');
+
+            const playbackSnaps = await page.evaluate(() => {
+              clearInterval(
+                (window as unknown as { __SPLIT_PLAYBACK_TIMER__: ReturnType<typeof setInterval> }).__SPLIT_PLAYBACK_TIMER__,
+              );
+              return (
+                window as unknown as {
+                  __SPLIT_PLAYBACK_SNAPS__: Array<{
+                    thinkingId: string;
+                    playerPayout: string;
+                    playerSession: string;
+                    playerStack: string;
+                    meiPayout: string;
+                    meiSession: string;
+                  }>;
+                }
+              ).__SPLIT_PLAYBACK_SNAPS__;
+            });
+            assert.ok(playbackSnaps.length > 0, 'Expected to observe Mei-Ling thinking on River before settlement');
+            for (const snap of playbackSnaps) {
+              assert.equal(snap.thinkingId, 'meiling');
+              assert.equal(snap.playerPayout, '—', 'Hand Payout must stay cleared while Mei-Ling is still thinking');
+              assert.equal(snap.playerSession, '$0', `Player Session Winnings must stay $0 during playback, saw: ${snap.playerSession}`);
+              assert.equal(snap.playerStack, `$${preCallPlayerStack - 40}`, 'Player stack must stay pre-settlement during playback');
+              assert.equal(snap.meiPayout, '—');
+              assert.equal(snap.meiSession, `$${h1MeiPayout}`, `Mei-Ling Session Winnings must stay $${h1MeiPayout} during playback, saw: ${snap.meiSession}`);
+            }
 
             const afterH2 = await readTablePots();
             assert.equal(afterH2.bySeat['meiling']?.payout, '$52', 'Mei-Ling Hand 2 payout must include odd chip ($52)');
@@ -3059,11 +3108,12 @@ test(
             assert.equal(afterH2.bySeat['elon']?.session, '$52');
             assert.equal(afterH2.bySeat['player']?.payout, '$51', 'Player Hand 2 payout must be $51');
             assert.equal(afterH2.bySeat['player']?.session, '$51');
+            assert.equal(afterH2.bySeat['player']?.stack, `$${preCallPlayerStack - 40 + 51}`, 'Player stack must update together with payouts at showdown');
             assert.equal(afterH2.bySeat['reginald']?.payout, '$0');
             assert.equal(afterH2.bySeat['buck']?.payout, '$0');
           },
           {
-            turnSpeed: 0.02,
+            turnSpeed: 0.15,
             engineOptions: {
               initialButtonSeatIndex: 4,
               random: () => 0.99,
