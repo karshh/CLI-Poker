@@ -1847,12 +1847,16 @@
     }
   }
 
-  function lockActionsDuringTurns(message) {
+  function lockActionsDuringTurns(message, options = {}) {
     activeHotkeys = {};
     elActionPromptTitle.textContent = message;
-    elActionButtonsGroup.querySelectorAll('button').forEach((btn) => {
-      btn.disabled = true;
-    });
+    if (options.clearButtons) {
+      elActionButtonsGroup.innerHTML = '';
+    } else {
+      elActionButtonsGroup.querySelectorAll('button').forEach((btn) => {
+        btn.disabled = true;
+      });
+    }
     if (elPickOpponentsBtn) elPickOpponentsBtn.disabled = true;
     if (elBtnRandomOpps) elBtnRandomOpps.disabled = true;
     if (elBtnConfirmOpps) elBtnConfirmOpps.disabled = true;
@@ -1913,19 +1917,39 @@
       closeOpponentDialog();
     }
 
+    const isNewHandStart = !currentState || nextState.handCount !== currentState.handCount;
+    const isLeavingShowdown = Boolean(
+      currentState && (currentState.stage === 'hand_over' || currentState.stage === 'game_over'),
+    );
+
     isPlayingTurns = true;
     skipCurrentPlayback = false;
     skipPlaybackHadFocus = false;
-    lockActionsDuringTurns('Opponents are making their decisions...');
+    lockActionsDuringTurns(
+      isLeavingShowdown ? 'Dealing new hand — opponents are acting...' : 'Opponents are making their decisions...',
+      { clearButtons: isLeavingShowdown },
+    );
     if (elSkipPlaybackBtn) {
       elSkipPlaybackBtn.hidden = false;
       elSkipPlaybackBtn.disabled = false;
     }
 
-    // If a new hand just started (e.g. clicking Easy or Play Again), clear old bubbles/board & deal player cards right away
-    const isNewHandStart = !currentState || nextState.handCount !== currentState.handCount;
+    const snapOpps = nextState.turnStartOpponents || {};
+
+    // If a new hand just started (e.g. clicking Easy or Play Again), clear old bubbles/badges/board & deal player cards right away
     if (isNewHandStart) {
-      document.querySelectorAll('.opponent-bubble').forEach((b) => b.classList.remove('active', 'thinking'));
+      if (elSessionSummaryPanel) {
+        elSessionSummaryPanel.hidden = true;
+      }
+      document.querySelectorAll('.opponent-bubble').forEach((b) => {
+        b.classList.remove('active', 'thinking');
+        const txt = b.querySelector('.speech-text');
+        if (txt) txt.textContent = '';
+      });
+      if (elDealerBubble && elDealerBubbleText) {
+        elDealerBubbleText.textContent = `Hand #${nextState.handCount} (You: ${nextState.playerPosition}). Blinds posted ($${nextState.smallBlind}/$${nextState.bigBlind}).`;
+        elDealerBubble.classList.add('active');
+      }
       elHandCount.textContent = nextState.handCount || 1;
       elDifficulty.textContent = nextState.mode ? nextState.mode.toUpperCase() : 'Selecting';
       elStreetBanner.textContent = 'PRE-FLOP';
@@ -1945,7 +1969,32 @@
         `;
       }
       (nextState.opponents || []).forEach((opp) => {
+        const elContainer = findSeatContainerByOppId(opp.id);
+        const elNameplate = findNameplateByOppId(opp.id);
+        const elAvatar = document.getElementById(`opp-avatar-${opp.id}`);
+        const elActionBadge = document.getElementById(`opp-action-${opp.id}`);
         const elCards = document.getElementById(`opp-cards-container-${opp.id}`);
+        const snap = snapOpps[opp.id];
+        const initialAction = snap && typeof snap.lastAction === 'string' && snap.lastAction.length > 0 ? snap.lastAction : null;
+
+        if (elContainer) {
+          elContainer.classList.remove('folded', 'is-thinking');
+        }
+        if (elNameplate) {
+          elNameplate.classList.remove('folded', 'is-thinking');
+        }
+        if (elAvatar) {
+          elAvatar.className = 'avatar opponent-avatar neutral';
+        }
+        if (elActionBadge) {
+          if (initialAction) {
+            elActionBadge.textContent = initialAction;
+            elActionBadge.className = `opp-action-badge visible ${getActionBadgeClass(initialAction)}`;
+          } else {
+            elActionBadge.textContent = '';
+            elActionBadge.className = 'opp-action-badge';
+          }
+        }
         if (elCards) {
           elCards.classList.remove('folded');
           elCards.innerHTML = `
@@ -1969,7 +2018,6 @@
           : nextState.playerHandContribution || 0,
       opponents: {},
     };
-    const snapOpps = nextState.turnStartOpponents || {};
     (nextState.opponents || []).forEach((opp) => {
       const snap = snapOpps[opp.id];
       livePots.opponents[opp.id] = {
@@ -2046,7 +2094,7 @@
       setOpponentThinking(event);
       if (livePots.opponents[event.opponentId]) {
         livePots.opponents[event.opponentId].thinking = true;
-        if (currentState) renderPotsWindow(currentState, livePots);
+        renderPotsWindow(nextState, livePots);
       }
 
       const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
@@ -2060,7 +2108,7 @@
         folded: event.folded,
         thinking: false,
       };
-      if (currentState) renderPotsWindow(currentState, livePots);
+      renderPotsWindow(nextState, livePots);
 
       await delay(650);
     }
@@ -2299,7 +2347,12 @@
   async function sendAction(action) {
     if (isActionLocked) return;
     isActionLocked = true;
-    lockActionsDuringTurns('Submitting action...');
+    const isLeavingShowdown =
+      Boolean(currentState && (currentState.stage === 'hand_over' || currentState.stage === 'game_over')) &&
+      (action === 'yes' || action === 'y' || action === 'again' || action === 'restart');
+    lockActionsDuringTurns(isLeavingShowdown ? 'Dealing new hand...' : 'Submitting action...', {
+      clearButtons: isLeavingShowdown,
+    });
     ensureAudio();
 
     try {

@@ -1651,3 +1651,43 @@ test('PokerGameEngine finishShowdown explains equal-category wins (higher rank &
   assert.deepEqual(diffBoardState.outcome?.bestFiveCards, ['A♣', 'K♦', 'J♣', '10♥', '8♥']);
   assert.deepEqual(diffBoardState.outcome?.winningBestFiveCards, ['A♣', 'K♦', 'Q♥', '8♥', '6♠']);
 });
+
+test('PokerGameEngine turnStartOpponents snapshots new-hand blind badges and clears previous-hand showdown badges', () => {
+  const makeDeck = () => {
+    const cards = [
+      new Card('♣', '7'), new Card('♦', '4'), // Player
+      new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (folds on hard)
+      new Card('♣', '9'), new Card('♦', '8'), // Seat 2: Buck (checks & wins Hand 1 with One pair of 9s)
+      new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (folds on hard)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (folds on hard)
+      new Card('♠', '9'), new Card('♦', '6'), new Card('♠', '3'), // Flop -> Buck pairs 9
+      new Card('♣', 'Q'), // Turn
+      new Card('♥', '2'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const engine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeDeck,
+  });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  engine.act('hard');
+  engine.act('call');
+  engine.act('check');
+  engine.act('check');
+  const h1End = engine.act('check');
+  assert.equal(h1End.stage, 'hand_over');
+  assert.match(h1End.opponents.find((o) => o.id === 'buck')?.lastAction ?? '', /^Wins/);
+  assert.equal(h1End.opponents.find((o) => o.id === 'reginald')?.lastAction, 'Folded');
+
+  // Hand 2: BTN rotates to reginald -> SB=buck, BB=elon, UTG=tony, CO=You
+  const h2Start = engine.act('yes');
+  assert.equal(h2Start.handCount, 2);
+  assert.ok(h2Start.turnEvents.length > 0);
+  assert.equal(h2Start.turnStartOpponents['reginald']?.lastAction, null);
+  assert.equal(h2Start.turnStartOpponents['buck']?.lastAction, 'SB $5');
+  assert.equal(h2Start.turnStartOpponents['elon']?.lastAction, 'BB $10');
+  assert.equal(h2Start.turnStartOpponents['tony']?.lastAction, null);
+});
