@@ -3158,6 +3158,239 @@ test(
           { turnSpeed: 0.02 },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 16: Issue #23 — Showdown Badges & Controls Clear Immediately on Next Hand
+      // ----------------------------------------------------------------------
+      await t.test('next-hand transition clears showdown badges and replaces showdown buttons during opening opponent playback, Skip, and player-first paths', async () => {
+        const makeHandDeck = () => {
+          const cards = [
+            new Card('♣', '7'), new Card('♦', '4'), // Player
+            new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (weak -> folds on hard)
+            new Card('♣', '9'), new Card('♦', '8'), // Seat 2: Buck (checks & wins Hand 1 with One pair of 9s)
+            new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (weak -> folds on hard)
+            new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (weak -> folds on hard)
+            new Card('♠', '9'), new Card('♦', '6'), new Card('♠', '3'), // Flop -> Buck pairs 9
+            new Card('♣', 'Q'), // Turn
+            new Card('♥', '2'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // Hand 1 -> Buck wins with One pair; Reginald/Elon/Tony have Folded badges
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            assert.match((await page.locator('#opp-action-buck').textContent())?.trim() || '', /^Wins/);
+            assert.equal((await page.locator('#opp-action-reginald').textContent())?.trim(), 'Folded');
+            assert.equal(await page.locator('#action-buttons-group button[data-choice-id="yes"]').count(), 1);
+            assert.equal(await page.locator('#action-buttons-group button[data-choice-id="no"]').count(), 1);
+
+            // Click Play Again -> Hand 2 (BTN=reginald, SB=buck, BB=elon, UTG=tony acts first before Player CO)
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await page.waitForSelector('.character-container.is-thinking', { timeout: 5000 });
+
+            // Assert BEFORE playback ends: stale showdown badges & buttons are gone while Skip is available
+            const duringPlayback = await page.evaluate(() => {
+              const badges: Record<string, string> = {};
+              for (const id of ['reginald', 'buck', 'elon', 'tony']) {
+                badges[id] = document.getElementById(`opp-action-${id}`)?.textContent?.trim() || '';
+              }
+              const actionBtnIds = Array.from(document.querySelectorAll('#action-buttons-group button')).map(
+                (btn) => btn.getAttribute('data-choice-id') || '',
+              );
+              const skipBtn = document.getElementById('skip-playback-btn') as HTMLButtonElement | null;
+              return {
+                badges,
+                actionBtnIds,
+                promptTitle: document.getElementById('action-prompt-title')?.textContent?.trim() || '',
+                skipVisible: Boolean(skipBtn && !skipBtn.hidden && !skipBtn.disabled),
+              };
+            });
+
+            assert.equal(
+              /wins|tie|folded/i.test(duringPlayback.badges['buck'] || ''),
+              false,
+              `Buck's previous-hand Wins badge must clear on Hand 2 playback, saw: ${duringPlayback.badges['buck']}`,
+            );
+            assert.equal(
+              /folded/i.test(duringPlayback.badges['reginald'] || ''),
+              false,
+              `Reginald's previous-hand Folded badge must clear on Hand 2 playback, saw: ${duringPlayback.badges['reginald']}`,
+            );
+            assert.deepEqual(
+              duringPlayback.actionBtnIds,
+              [],
+              `Old showdown buttons must be cleared during Hand 2 playback, saw: ${JSON.stringify(duringPlayback.actionBtnIds)}`,
+            );
+            assert.equal(duringPlayback.skipVisible, true, 'Skip button must remain visible and enabled during playback');
+
+            // Normal playback completes -> legal Hand 2 Pre-flop controls appear
+            await waitForPromptReady(page, 'Pre-flop');
+            const hand2Choices = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('#action-buttons-group button:not(:disabled)')).map(
+                (b) => b.getAttribute('data-choice-id') || '',
+              ),
+            );
+            assert.deepEqual(hand2Choices, ['call', 'bet', 'fold']);
+
+            // Finish Hand 2 by folding -> Hand 3 (BTN=buck, SB=elon, BB=tony, UTG=You -> player-first path!)
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await waitForPromptReady(page, 'Pre-flop (UTG)');
+
+            const hand3Choices = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('#action-buttons-group button:not(:disabled)')).map(
+                (b) => b.getAttribute('data-choice-id') || '',
+              ),
+            );
+            assert.deepEqual(hand3Choices, ['call', 'bet', 'fold']);
+
+            // Finish Hand 3 by folding -> Hand 4 (BTN=elon, SB=tony, BB=You, UTG=reginald acts first) -> test Skip fast-forward path
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            const skipBtn = page.locator('#skip-playback-btn');
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            // Verify showdown buttons already cleared before clicking Skip
+            assert.equal(await page.locator('#action-buttons-group button[data-choice-id="yes"]').count(), 0);
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Pre-flop • BB');
+            const hand4Choices = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('#action-buttons-group button:not(:disabled)')).map(
+                (b) => b.getAttribute('data-choice-id') || '',
+              ),
+            );
+            assert.deepEqual(hand4Choices, ['check', 'bet', 'fold']);
+          },
+          {
+            turnSpeed: 0.25,
+            engineOptions: {
+              initialButtonSeatIndex: 0,
+              random: () => 0.99,
+              deckFactory: makeHandDeck,
+            },
+          },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 17: Issue #23 Follow-Up — Table Pots Keeps Pre-Settlement Won Totals During Final Opponent Playback
+      // ----------------------------------------------------------------------
+      await t.test('Table Pots keeps pre-settlement Won totals while final River opponent is thinking and updates together at showdown', async () => {
+        const makeRiverSplitDeck = () => {
+          const cards = [
+            new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+            new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> folds $5 dead)
+            new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> acts after Player calls $40 on River!)
+            new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> calls $10, bets $40 on River)
+            new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> folds)
+            new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'),
+            new Card('♠', 'A'),
+            new Card('♦', '4'),
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+
+            // Observe Table Pots while Mei-Ling is still thinking after Player calls $40 on the River
+            await page.evaluate(() => {
+              const snaps: Array<{ thinkingId: string; playerWon: string; playerStack: string; meiWon: string }> = [];
+              (window as unknown as { __RIVER_POTS_SNAPS__: typeof snaps }).__RIVER_POTS_SNAPS__ = snaps;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  const playerRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="player"]');
+                  const meiRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="meiling"]');
+                  snaps.push({
+                    thinkingId: thinking.getAttribute('data-opp-id') || '',
+                    playerWon: playerRow?.querySelector('.pots-val.won')?.textContent?.trim() || '',
+                    playerStack: playerRow?.querySelector('.pots-val.stack')?.textContent?.trim() || '',
+                    meiWon: meiRow?.querySelector('.pots-val.won')?.textContent?.trim() || '',
+                  });
+                }
+              }, 25);
+              (window as unknown as { __RIVER_POTS_TIMER__: ReturnType<typeof setInterval> }).__RIVER_POTS_TIMER__ = timer;
+            });
+
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await page.waitForSelector('.character-container.is-thinking[data-opp-id="meiling"]', { timeout: 5000 });
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const thinkingSnaps = await page.evaluate(() => {
+              clearInterval((window as unknown as { __RIVER_POTS_TIMER__: ReturnType<typeof setInterval> }).__RIVER_POTS_TIMER__);
+              return (
+                window as unknown as {
+                  __RIVER_POTS_SNAPS__: Array<{ thinkingId: string; playerWon: string; playerStack: string; meiWon: string }>;
+                }
+              ).__RIVER_POTS_SNAPS__;
+            });
+
+            assert.ok(thinkingSnaps.length > 0, 'Expected to observe Mei-Ling thinking after Player called $40 on River');
+            for (const snap of thinkingSnaps) {
+              assert.equal(snap.thinkingId, 'meiling');
+              assert.equal(snap.playerWon, '$0', `Player Won must stay $0 while Mei-Ling is still thinking, saw: ${snap.playerWon}`);
+              assert.equal(snap.playerStack, '$450', `Player stack must stay $450 while Mei-Ling is still thinking, saw: ${snap.playerStack}`);
+              assert.equal(snap.meiWon, '$0', `Mei-Ling Won must stay $0 while still thinking, saw: ${snap.meiWon}`);
+            }
+
+            // Once showdown renders, Won and Stack update together
+            const settled = await page.evaluate(() => {
+              const playerRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="player"]');
+              const meiRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="meiling"]');
+              return {
+                playerWon: playerRow?.querySelector('.pots-val.won')?.textContent?.trim() || '',
+                playerStack: playerRow?.querySelector('.pots-val.stack')?.textContent?.trim() || '',
+                meiWon: meiRow?.querySelector('.pots-val.won')?.textContent?.trim() || '',
+              };
+            });
+            assert.equal(settled.playerWon, '$51');
+            assert.equal(settled.playerStack, '$501');
+            assert.equal(settled.meiWon, '$52');
+          },
+          {
+            turnSpeed: 0.25,
+            engineOptions: {
+              initialButtonSeatIndex: 0,
+              random: () => 0.99,
+              deckFactory: makeRiverSplitDeck,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }
