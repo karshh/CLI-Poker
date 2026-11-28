@@ -1855,6 +1855,78 @@ test('PokerGameEngine narrates two-way, three-way, and five-way split pots accur
   assert.doesNotMatch(fiveWayEnd.dealerSpeech, /\bboth\b/i);
 });
 
+test('PokerGameEngine turnStartOpponents snapshots new-hand blind badges and clears previous-hand showdown badges', () => {
+  const makeDeck = () => {
+    const cards = [
+      new Card('♣', '7'), new Card('♦', '4'), // Player
+      new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (folds on hard)
+      new Card('♣', '9'), new Card('♦', '8'), // Seat 2: Buck (checks & wins Hand 1 with One pair of 9s)
+      new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (folds on hard)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Tony (folds on hard)
+      new Card('♠', '9'), new Card('♦', '6'), new Card('♠', '3'), // Flop -> Buck pairs 9
+      new Card('♣', 'Q'), // Turn
+      new Card('♥', '2'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const engine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeDeck,
+  });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  engine.act('hard');
+  engine.act('call');
+  engine.act('check');
+  engine.act('check');
+  const h1End = engine.act('check');
+  assert.equal(h1End.stage, 'hand_over');
+  assert.match(h1End.opponents.find((o) => o.id === 'buck')?.lastAction ?? '', /^Wins/);
+  assert.equal(h1End.opponents.find((o) => o.id === 'reginald')?.lastAction, 'Folded');
+
+  // Hand 2: BTN rotates to reginald -> SB=buck, BB=elon, UTG=tony, CO=You
+  const h2Start = engine.act('yes');
+  assert.equal(h2Start.handCount, 2);
+  assert.ok(h2Start.turnEvents.length > 0);
+  assert.equal(h2Start.turnStartOpponents['reginald']?.lastAction, null);
+  assert.equal(h2Start.turnStartOpponents['buck']?.lastAction, 'SB $5');
+  assert.equal(h2Start.turnStartOpponents['elon']?.lastAction, 'BB $10');
+  assert.equal(h2Start.turnStartOpponents['tony']?.lastAction, null);
+
+  // Verify turnStartPlayerTotalPotWon and turnStartOpponents[*].totalPotWon stay at pre-settlement values during River settlement playback
+  const makeRiverSplitDeck = () => {
+    const cards = [
+      new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+      new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> folds $5)
+      new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> 5-high Straight)
+      new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> calls $10, bets $40 on River)
+      new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> folds)
+      new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'),
+      new Card('♠', 'A'),
+      new Card('♦', '4'),
+    ];
+    return { draw: () => cards.shift()! };
+  };
+  const riverEngine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.99,
+    deckFactory: makeRiverSplitDeck,
+  });
+  riverEngine.act('select_opponents:reginald,meiling,elon,buck');
+  riverEngine.act('hard');
+  riverEngine.act('call');
+  riverEngine.act('check');
+  riverEngine.act('check');
+  const riverEnd = riverEngine.act('call'); // Player calls $40; Mei-Ling still acts before showdown!
+  assert.equal(riverEnd.stage, 'hand_over');
+  assert.ok(riverEnd.turnEvents.length > 0, 'Expected Mei-Ling River turnEvent before settlement');
+  assert.equal(riverEnd.turnStartPlayerTotalPotWon, 0, 'turnStartPlayerTotalPotWon must stay pre-settlement ($0)');
+  assert.equal(riverEnd.turnStartOpponents['meiling']?.totalPotWon, 0);
+  assert.equal(riverEnd.turnStartOpponents['elon']?.totalPotWon, 0);
+  assert.equal(riverEnd.playerTotalPotWon, 51, 'Settled playerTotalPotWon is $51');
+});
+
 test('PokerGameEngine outcome.pots reports per-hand payouts separately from cumulative totalPotWon across multiway odd-chip splits and excludes uncalled returns', () => {
   // 1. Uncalled bet return with $0 blinds: playerPayout is 0 and no pot awards are emitted
   const foldDeck = () => {
@@ -1932,7 +2004,6 @@ test('PokerGameEngine outcome.pots reports per-hand payouts separately from cumu
   assert.equal(h1.outcome?.pots?.[0]?.winners.find((w) => w.id === 'meiling')?.amount, 50);
 
   // Hand 2: BTN rotates to Reginald (seat 1), SB=Mei-Ling (seat 2), BB=Elon (seat 3), UTG=Buck (seat 4), CO=You (seat 0).
-  // Switch to rng=0.05 on easy? Wait: on easy mode calling threshold is low; just verify all-in/pot with exact awards!
   const h2Start = engine.act('yes');
   assert.equal(h2Start.outcome, null, 'Next hand clears outcome/current-hand payout');
   assert.equal(h2Start.opponents.find((o) => o.id === 'meiling')?.totalPotWon, 50, 'Session winnings persist into Hand 2');

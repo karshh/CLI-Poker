@@ -174,6 +174,7 @@ export interface TurnStartSeatSnapshot {
   handContribution: number;
   totalPotWon: number;
   folded: boolean;
+  lastAction: string | null;
 }
 
 export interface PotAwardBreakdown {
@@ -631,6 +632,7 @@ export class PokerGameEngine {
         handContribution: opp.handContribution,
         totalPotWon: opp.totalPotWon,
         folded: opp.folded,
+        lastAction: opp.lastAction,
       };
     }
     this.turnStartOpponents = oppSnap;
