@@ -259,7 +259,7 @@ html, body {
   position: absolute;
   top: 12px;
   left: 16px;
-  width: 332px;
+  width: 404px;
   background: rgba(12, 16, 26, 0.93);
   border: 1.5px solid rgba(212, 175, 55, 0.6);
   border-radius: 10px;
@@ -320,18 +320,20 @@ html, body {
 
 .pots-window-cols {
   display: grid;
-  grid-template-columns: minmax(0, 1.75fr) minmax(44px, 0.65fr) minmax(44px, 0.65fr) minmax(48px, 0.7fr);
-  column-gap: 6px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(42px, 0.58fr) minmax(52px, 0.72fr) minmax(60px, 0.84fr) minmax(46px, 0.64fr);
+  column-gap: 5px;
+  align-items: end;
   padding: 5px 10px;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.7px;
+  letter-spacing: 0.5px;
+  line-height: 1.15;
   text-transform: uppercase;
   color: #9ca3af;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .pots-window-cols span {
-  white-space: nowrap;
+  white-space: normal;
 }
 .pots-window-cols span:not(:first-child) {
   text-align: right;
@@ -345,8 +347,8 @@ html, body {
 
 .pots-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.75fr) minmax(44px, 0.65fr) minmax(44px, 0.65fr) minmax(48px, 0.7fr);
-  column-gap: 6px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(42px, 0.58fr) minmax(52px, 0.72fr) minmax(60px, 0.84fr) minmax(46px, 0.64fr);
+  column-gap: 5px;
   align-items: center;
   padding: 5px 10px;
   font-size: 11px;
@@ -411,6 +413,8 @@ html, body {
   white-space: nowrap;
 }
 .pots-val.in-pot { color: #fde68a; }
+.pots-val.payout { color: #94a3b8; }
+.pots-val.payout.has-payout { color: #fbbf24; }
 .pots-val.won { color: #60a5fa; }
 .pots-val.stack { color: #34d399; }
 
@@ -1994,6 +1998,20 @@ html, body {
     top: 8px;
     width: min(350px, calc(100vw - 16px));
   }
+  .pots-window-cols,
+  .pots-row {
+    grid-template-columns: minmax(0, 1.45fr) minmax(36px, 0.52fr) minmax(44px, 0.62fr) minmax(52px, 0.72fr) minmax(44px, 0.62fr);
+    column-gap: 4px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .pots-window-cols {
+    font-size: 8px;
+    letter-spacing: 0.3px;
+  }
+  .pots-row {
+    font-size: 10.5px;
+  }
   .dialogue-panel {
     flex-direction: column;
     gap: 6px;
@@ -2161,6 +2179,6 @@ html, body {
   .pots-window {
     top: 4px;
     left: 8px;
-    width: min(296px, calc(100vw - 16px));
+    width: min(368px, calc(100vw - 16px));
   }
 }

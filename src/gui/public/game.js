@@ -1415,11 +1415,42 @@
     });
   }
 
+  function computeHandPayoutsBySeat(state) {
+    const payouts = {};
+    if (!state || !state.outcome) {
+      return payouts;
+    }
+    const pots = Array.isArray(state.outcome.pots) ? state.outcome.pots : [];
+    if (pots.length > 0) {
+      pots.forEach((potEntry) => {
+        (potEntry.winners || []).forEach((winner) => {
+          if (winner && typeof winner.id === 'string' && typeof winner.amount === 'number') {
+            payouts[winner.id] = (payouts[winner.id] || 0) + winner.amount;
+          }
+        });
+      });
+    } else if (typeof state.outcome.playerPayout === 'number' && state.outcome.playerPayout > 0) {
+      payouts.player = state.outcome.playerPayout;
+    }
+    return payouts;
+  }
+
   // Render Hidable Table Pots & Stacks Window
   function renderPotsWindow(state, liveOverrides = null) {
     if (!elPotsWindowBody || !elPotsWindowTotal) return;
     const currentPot = liveOverrides && typeof liveOverrides.pot === 'number' ? liveOverrides.pot : state.pot;
     elPotsWindowTotal.textContent = `Pot: $${currentPot}`;
+
+    const isSettled = !liveOverrides && Boolean(state && state.outcome);
+    const handPayouts = isSettled ? computeHandPayoutsBySeat(state) : null;
+    const formatHandPayoutCell = (seatId) => {
+      if (!isSettled) {
+        return '<span class="pots-val payout" data-col="hand-payout">—</span>';
+      }
+      const amt = handPayouts[seatId] || 0;
+      const cls = amt > 0 ? 'pots-val payout has-payout' : 'pots-val payout';
+      return `<span class="${cls}" data-col="hand-payout">$${amt}</span>`;
+    };
 
     const rows = [];
     (state.opponents || []).forEach((opp) => {
@@ -1437,15 +1468,16 @@
         : '';
 
       rows.push(`
-        <div class="pots-row ${statusClass}">
+        <div class="pots-row ${statusClass}" data-seat-id="${opp.id}">
           <span class="pots-player-name pots-player-cell">
             <span class="pots-status-dot ${statusClass}"></span>
             <span class="pots-player-label" title="${opp.shortName}">${opp.emoji} ${opp.shortName}</span>
             ${posPill}
           </span>
-          <span class="pots-val in-pot">$${inPot}</span>
-          <span class="pots-val won">$${opp.totalPotWon || 0}</span>
-          <span class="pots-val stack">$${chips}</span>
+          <span class="pots-val in-pot" data-col="in-pot">$${inPot}</span>
+          ${formatHandPayoutCell(opp.id)}
+          <span class="pots-val won" data-col="session-winnings">$${opp.totalPotWon || 0}</span>
+          <span class="pots-val stack" data-col="stack">$${chips}</span>
         </div>
       `);
     });
@@ -1460,15 +1492,16 @@
     const pPosPill = `<span class="pos-badge pos-badge-sm pots-pos-pill pos-${pPos.toLowerCase()}" title="${state.playerPositionLabel || pPos}">${pPos}</span>`;
 
     rows.push(`
-      <div class="pots-row is-you">
+      <div class="pots-row is-you" data-seat-id="player">
         <span class="pots-player-name pots-player-cell">
           <span class="pots-status-dot active"></span>
           <span class="pots-player-label" title="You">👤 You</span>
           ${pPosPill}
         </span>
-        <span class="pots-val in-pot">$${playerInPot}</span>
-        <span class="pots-val won">$${state.playerTotalPotWon || 0}</span>
-        <span class="pots-val stack">$${playerChips}</span>
+        <span class="pots-val in-pot" data-col="in-pot">$${playerInPot}</span>
+        ${formatHandPayoutCell('player')}
+        <span class="pots-val won" data-col="session-winnings">$${state.playerTotalPotWon || 0}</span>
+        <span class="pots-val stack" data-col="stack">$${playerChips}</span>
       </div>
     `);
 
@@ -2046,7 +2079,7 @@
       setOpponentThinking(event);
       if (livePots.opponents[event.opponentId]) {
         livePots.opponents[event.opponentId].thinking = true;
-        if (currentState) renderPotsWindow(currentState, livePots);
+        renderPotsWindow(nextState, livePots);
       }
 
       const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
@@ -2060,7 +2093,7 @@
         folded: event.folded,
         thinking: false,
       };
-      if (currentState) renderPotsWindow(currentState, livePots);
+      renderPotsWindow(nextState, livePots);
 
       await delay(650);
     }

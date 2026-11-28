@@ -1872,6 +1872,18 @@ export class PokerGameEngine {
     this.outcome = {
       result: 'win',
       pot: awardedPot,
+      playerPayout: awardedPot,
+      ...(awardedPot > 0
+        ? {
+            pots: [
+              {
+                label: 'Main pot',
+                amount: awardedPot,
+                winners: [{ id: 'player', name: 'You', amount: awardedPot }],
+              },
+            ],
+          }
+        : {}),
       playerRank: null,
       opponentRank: null,
       winnerNames: ['You'],

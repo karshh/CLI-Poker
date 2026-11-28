@@ -1945,7 +1945,7 @@ test(
                     `Position badge ${row.pillText} for ${row.labelText} too narrow/clipped: width=${row.pillRect.width}`,
                   );
 
-                  assert.equal(row.vals.length, 3, `Expected 3 numeric columns for ${row.labelText}`);
+                  assert.equal(row.vals.length, 4, `Expected 4 numeric columns for ${row.labelText}`);
                   let prevRight = row.cellRect.right;
                   for (const val of row.vals) {
                     assert.ok(
@@ -1964,6 +1964,27 @@ test(
                   }
                 }
                 assert.deepEqual([...seenPositions].sort(), ['BB', 'BTN', 'CO', 'SB', 'UTG']);
+
+                const headerOverflow = await page.evaluate(() => {
+                  return Array.from(document.querySelectorAll('#pots-window .pots-window-cols span')).map((el) => {
+                    const h = el as HTMLElement;
+                    return {
+                      text: h.textContent?.trim() || '',
+                      scrollWidth: h.scrollWidth,
+                      clientWidth: h.clientWidth,
+                    };
+                  });
+                });
+                assert.deepEqual(
+                  headerOverflow.map((h) => h.text),
+                  ['Player', 'In Pot', 'Hand Payout', 'Session Winnings', 'Stack'],
+                );
+                for (const col of headerOverflow) {
+                  assert.ok(
+                    col.scrollWidth <= col.clientWidth + 1,
+                    `Table Pots header "${col.text}" overflows at ${vp.width}px: scrollWidth=${col.scrollWidth}, clientWidth=${col.clientWidth}`,
+                  );
+                }
               },
               {
                 turnSpeed: 0.02,
@@ -2899,6 +2920,154 @@ test(
               initialButtonSeatIndex: 0,
               random: () => (turnRngQueue.length > 0 ? turnRngQueue.shift()! : 0.5),
               deckFactory: makePlaybackTestDeck,
+            },
+          },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 16: Issue #25 — Current-Hand Payouts Shown Separately From Session Winnings
+      // ----------------------------------------------------------------------
+      await t.test('Table Pots displays Hand Payout separately from Session Winnings across multiway odd-chip splits and clears on next hand', async () => {
+        let handIdx = 0;
+        const deckFactory = () => {
+          handIdx += 1;
+          if (handIdx === 1) {
+            // Hand 1 (BTN=You, SB=Reginald, BB=Mei-Ling, UTG=Elon, CO=Buck):
+            // On hard mode with random=0.99: UTG(Elon), CO(Buck), SB(Reginald) fold -> Mei-Ling (BB) & Player (BTN) check down -> Mei-Ling wins $25!
+            const cards = [
+              new Card('♥', '4'), new Card('♣', '8'), // Player (BTN)
+              new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> folds $5)
+              new Card('♠', 'A'), new Card('♥', 'A'), // Seat 2: Mei-Ling (BB -> wins $25!)
+              new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (UTG -> folds)
+              new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> folds)
+              new Card('♣', '3'), new Card('♦', '6'), new Card('♠', '9'),
+              new Card('♣', 'Q'),
+              new Card('♥', '7'),
+            ];
+            return { draw: () => cards.shift()! };
+          }
+          // Hand 2 (BTN=Reginald, SB=Mei-Ling, BB=Elon, UTG=Buck, CO=You):
+          // On hard mode with random=0.99:
+          // - UTG (Buck 7♦ 2♠) folds; CO (You A♥ 2♥) calls $10; BTN (Reginald 7♣ 2♦) folds;
+          // - SB (Mei-Ling 4♥ 2♥ suited -> 0.25 + 0.10 = 0.35 >= 0.32!) calls $5; BB (Elon 3♣ 2♣) checks!
+          // Wait: to make an odd pot ($35), let BTN (Reginald) fold and give someone $5 dead? Wait: SB (Mei-Ling) calls $5 -> total $30!
+          // Better: Hand 2 uses BTN=Reginald(folds), SB=Mei-Ling($5 + $5 = $10), BB=Elon($10), UTG=Buck(folds), CO=You($10) -> $30;
+          // Let's make Hand 2 a $35 odd-chip 3-way split! On Hand 2, if initialButtonSeatIndex=4 on Hand 1 ->
+          // Hand 1: BTN=Buck(4), SB=You(0), BB=Reginald(1), UTG=Mei-Ling(2), CO=Elon(3)
+          // Even simpler: keep initialButtonSeatIndex=4 so Hand 2 has BTN=You(0), SB=Reginald(1 -> folds $5 dead!), BB=Mei-Ling(2), UTG=Elon(3), CO=Buck(4 -> folds)!
+          // Let's check Hand 1 with initialButtonSeatIndex=4:
+          //   BTN=Buck(4), SB=You(0), BB=Reginald(1), UTG=Mei-Ling(2 -> A♠ A♥ raises/calls), CO=Elon(3 -> folds)
+          //   Even easier: Hand 2 is $35 pot with BTN=You(0), SB=Reginald(1 -> folds $5 dead), BB=Mei-Ling(2), UTG=Elon(3 -> 3♣ 2♣ calls $10), CO=Buck(4 -> folds)!
+          //   Total pot = $35 -> Mei-Ling (BB) = $12, Elon (UTG) = $12, Player (BTN) = $11!
+          // And on Hand 1 (initialButtonSeatIndex=4): BTN=Buck(4 -> folds), SB=You(0 -> calls $5), BB=Reginald(1 -> checks), UTG=Mei-Ling(2 -> A♠ A♥ calls $10), CO=Elon(3 -> folds)
+          //   Mei-Ling wins $30 on Hand 1 (Mei-Ling Session Winnings = $30)!
+          //   Then Hand 2 (BTN=You): 3-way split of $35 -> Mei-Ling Hand Payout = $12, Session Winnings = $42; Elon Hand Payout = $12, Session = $12; Player Hand Payout = $11, Session = $11!
+          const cards = [
+            new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+            new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> 0.25 < 0.32, folds $5 dead!)
+            new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> checks, 5-high Straight)
+            new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> 0.32 >= 0.32, calls $10, bets $40 on River Straight!)
+            new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> 0.25 < 0.32, folds)
+            new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'), // Flop
+            new Card('♠', 'A'), // Turn
+            new Card('♦', '4'), // River -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)!
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            const readTablePots = async () =>
+              page.evaluate(() => {
+                const headers = Array.from(document.querySelectorAll('#pots-window .pots-window-cols span')).map(
+                  (el) => el.textContent?.trim() || '',
+                );
+                const bySeat: Record<string, { inPot: string; payout: string; session: string; stack: string }> = {};
+                document.querySelectorAll('#pots-window-body .pots-row').forEach((row) => {
+                  const id = row.getAttribute('data-seat-id') || '';
+                  bySeat[id] = {
+                    inPot: row.querySelector('[data-col="in-pot"]')?.textContent?.trim() || '',
+                    payout: row.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    session: row.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                    stack: row.querySelector('[data-col="stack"]')?.textContent?.trim() || '',
+                  };
+                });
+                return { headers, bySeat };
+              });
+
+            // Before settlement, Hand Payout shows '—'
+            const preH1 = await readTablePots();
+            assert.deepEqual(preH1.headers, ['Player', 'In Pot', 'Hand Payout', 'Session Winnings', 'Stack']);
+            assert.equal(preH1.bySeat['meiling']?.payout, '—');
+            assert.equal(preH1.bySeat['player']?.payout, '—');
+
+            // Play Hand 1 to Showdown (Mei-Ling wins with Pocket Aces — note: Mei-Ling may raise pre-flop on hard, so respond to whatever prompt appears)
+            while (true) {
+              const title = (await page.locator('#action-prompt-title').textContent())?.trim() || '';
+              if (title.includes('Play another hand?')) break;
+              const checkBtn = page.locator('#action-buttons-group button[data-choice-id="check"]');
+              const callBtn = page.locator('#action-buttons-group button[data-choice-id="call"]');
+              if ((await checkBtn.count()) > 0) {
+                await checkBtn.click();
+              } else {
+                await callBtn.click();
+              }
+              await page.waitForFunction(() => {
+                const btns = Array.from(document.querySelectorAll('#action-buttons-group button'));
+                return btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
+              });
+            }
+
+            const afterH1 = await readTablePots();
+            const h1MeiPayout = Number((afterH1.bySeat['meiling']?.payout || '$0').replace('$', ''));
+            assert.ok(h1MeiPayout > 0, `Expected Mei-Ling to win Hand 1 pot, got: ${JSON.stringify(afterH1.bySeat['meiling'])}`);
+            assert.equal(afterH1.bySeat['meiling']?.session, `$${h1MeiPayout}`);
+            assert.equal(afterH1.bySeat['player']?.payout, '$0');
+            assert.equal(afterH1.bySeat['elon']?.payout, '$0');
+
+            // Start Hand 2 -> Hand Payout clears to '—' while Session Winnings retains Hand 1 total!
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await waitForPromptReady(page, 'Pre-flop');
+            const startH2 = await readTablePots();
+            assert.equal(startH2.bySeat['meiling']?.payout, '—', 'Current-hand payout must clear when Hand 2 begins');
+            assert.equal(startH2.bySeat['player']?.payout, '—');
+            assert.equal(startH2.bySeat['meiling']?.session, `$${h1MeiPayout}`, 'Session winnings must persist across hands');
+
+            // Finish Hand 2 -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const afterH2 = await readTablePots();
+            assert.equal(afterH2.bySeat['meiling']?.payout, '$52', 'Mei-Ling Hand 2 payout must include odd chip ($52)');
+            assert.equal(afterH2.bySeat['meiling']?.session, `$${h1MeiPayout + 52}`, 'Mei-Ling Session Winnings must equal Hand 1 + Hand 2');
+            assert.equal(afterH2.bySeat['elon']?.payout, '$52', 'Elon Hand 2 payout must include odd chip ($52)');
+            assert.equal(afterH2.bySeat['elon']?.session, '$52');
+            assert.equal(afterH2.bySeat['player']?.payout, '$51', 'Player Hand 2 payout must be $51');
+            assert.equal(afterH2.bySeat['player']?.session, '$51');
+            assert.equal(afterH2.bySeat['reginald']?.payout, '$0');
+            assert.equal(afterH2.bySeat['buck']?.payout, '$0');
+          },
+          {
+            turnSpeed: 0.02,
+            engineOptions: {
+              initialButtonSeatIndex: 4,
+              random: () => 0.99,
+              deckFactory,
             },
           },
         );
