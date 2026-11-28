@@ -1945,7 +1945,7 @@ test(
                     `Position badge ${row.pillText} for ${row.labelText} too narrow/clipped: width=${row.pillRect.width}`,
                   );
 
-                  assert.equal(row.vals.length, 3, `Expected 3 numeric columns for ${row.labelText}`);
+                  assert.equal(row.vals.length, 4, `Expected 4 numeric columns for ${row.labelText}`);
                   let prevRight = row.cellRect.right;
                   for (const val of row.vals) {
                     assert.ok(
@@ -1964,6 +1964,27 @@ test(
                   }
                 }
                 assert.deepEqual([...seenPositions].sort(), ['BB', 'BTN', 'CO', 'SB', 'UTG']);
+
+                const headerOverflow = await page.evaluate(() => {
+                  return Array.from(document.querySelectorAll('#pots-window .pots-window-cols span')).map((el) => {
+                    const h = el as HTMLElement;
+                    return {
+                      text: h.textContent?.trim() || '',
+                      scrollWidth: h.scrollWidth,
+                      clientWidth: h.clientWidth,
+                    };
+                  });
+                });
+                assert.deepEqual(
+                  headerOverflow.map((h) => h.text),
+                  ['Player', 'In Pot', 'Hand Payout', 'Session Winnings', 'Stack'],
+                );
+                for (const col of headerOverflow) {
+                  assert.ok(
+                    col.scrollWidth <= col.clientWidth + 1,
+                    `Table Pots header "${col.text}" overflows at ${vp.width}px: scrollWidth=${col.scrollWidth}, clientWidth=${col.clientWidth}`,
+                  );
+                }
               },
               {
                 turnSpeed: 0.02,
@@ -3466,6 +3487,204 @@ test(
           },
         );
       }
+
+      // ----------------------------------------------------------------------
+      // TEST 19: Issue #25 — Current-Hand Payouts Shown Separately From Session Winnings
+      // ----------------------------------------------------------------------
+      await t.test('Table Pots displays Hand Payout separately from Session Winnings across multiway odd-chip splits and clears on next hand', async () => {
+        let handIdx = 0;
+        const deckFactory = () => {
+          handIdx += 1;
+          if (handIdx === 1) {
+            // Hand 1 (BTN=You, SB=Reginald, BB=Mei-Ling, UTG=Elon, CO=Buck):
+            // On hard mode with random=0.99: UTG(Elon), CO(Buck), SB(Reginald) fold -> Mei-Ling (BB) & Player (BTN) check down -> Mei-Ling wins $25!
+            const cards = [
+              new Card('♥', '4'), new Card('♣', '8'), // Player (BTN)
+              new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> folds $5)
+              new Card('♠', 'A'), new Card('♥', 'A'), // Seat 2: Mei-Ling (BB -> wins $25!)
+              new Card('♥', '2'), new Card('♣', '5'), // Seat 3: Elon (UTG -> folds)
+              new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> folds)
+              new Card('♣', '3'), new Card('♦', '6'), new Card('♠', '9'),
+              new Card('♣', 'Q'),
+              new Card('♥', '7'),
+            ];
+            return { draw: () => cards.shift()! };
+          }
+          // Hand 2 (BTN=You, SB=Reginald, BB=Mei-Ling, UTG=Elon, CO=Buck):
+          // All 15 cards are unique. Reginald (3♥ 4♣) folds $5 dead and Buck (2♦ 5♠) folds pre-flop on Hard.
+          // Elon (5♣ 2♣) calls $10 pre-flop and bets $40 on the River when 4♦ completes a 5-high Straight for Player, Elon, and Mei-Ling.
+          // After Player calls $40, Mei-Ling acts last to call $40, settling a $155 three-way split ($52 Mei-Ling, $52 Elon, $51 Player).
+          const cards = [
+            new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
+            new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> 0.247 < 0.32, folds $5 dead)
+            new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> checks, 5-high Straight)
+            new Card('♣', '5'), new Card('♣', '2'), // Seat 3: Elon (UTG -> 0.32 >= 0.32, calls $10, bets $40 on River)
+            new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> 0.25 < 0.32, folds)
+            new Card('♠', '3'), new Card('♣', '10'), new Card('♦', '5'), // Flop
+            new Card('♠', 'A'), // Turn
+            new Card('♦', '4'), // River -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Hard' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            const readTablePots = async () =>
+              page.evaluate(() => {
+                const headers = Array.from(document.querySelectorAll('#pots-window .pots-window-cols span')).map(
+                  (el) => el.textContent?.trim() || '',
+                );
+                const bySeat: Record<string, { inPot: string; payout: string; session: string; stack: string }> = {};
+                document.querySelectorAll('#pots-window-body .pots-row').forEach((row) => {
+                  const id = row.getAttribute('data-seat-id') || '';
+                  bySeat[id] = {
+                    inPot: row.querySelector('[data-col="in-pot"]')?.textContent?.trim() || '',
+                    payout: row.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    session: row.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                    stack: row.querySelector('[data-col="stack"]')?.textContent?.trim() || '',
+                  };
+                });
+                return { headers, bySeat };
+              });
+
+            // Before settlement, Hand Payout shows '—'
+            const preH1 = await readTablePots();
+            assert.deepEqual(preH1.headers, ['Player', 'In Pot', 'Hand Payout', 'Session Winnings', 'Stack']);
+            assert.equal(preH1.bySeat['meiling']?.payout, '—');
+            assert.equal(preH1.bySeat['player']?.payout, '—');
+
+            // Play Hand 1 to Showdown (Mei-Ling wins with Pocket Aces)
+            while (true) {
+              const title = (await page.locator('#action-prompt-title').textContent())?.trim() || '';
+              if (title.includes('Play another hand?')) break;
+              const checkBtn = page.locator('#action-buttons-group button[data-choice-id="check"]');
+              const callBtn = page.locator('#action-buttons-group button[data-choice-id="call"]');
+              if ((await checkBtn.count()) > 0) {
+                await checkBtn.click();
+              } else {
+                await callBtn.click();
+              }
+              await page.waitForFunction(() => {
+                const btns = Array.from(document.querySelectorAll('#action-buttons-group button'));
+                return btns.length > 0 && btns.every((b) => !(b as HTMLButtonElement).disabled);
+              });
+            }
+
+            const afterH1 = await readTablePots();
+            const h1MeiPayout = Number((afterH1.bySeat['meiling']?.payout || '$0').replace('$', ''));
+            assert.ok(h1MeiPayout > 0, `Expected Mei-Ling to win Hand 1 pot, got: ${JSON.stringify(afterH1.bySeat['meiling'])}`);
+            assert.equal(afterH1.bySeat['meiling']?.session, `$${h1MeiPayout}`);
+            assert.equal(afterH1.bySeat['player']?.payout, '$0');
+            assert.equal(afterH1.bySeat['elon']?.payout, '$0');
+
+            // Start Hand 2 -> Hand Payout clears to '—' while Session Winnings retains Hand 1 total!
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await waitForPromptReady(page, 'Pre-flop');
+            const startH2 = await readTablePots();
+            assert.equal(startH2.bySeat['meiling']?.payout, '—', 'Current-hand payout must clear when Hand 2 begins');
+            assert.equal(startH2.bySeat['player']?.payout, '—');
+            assert.equal(startH2.bySeat['meiling']?.session, `$${h1MeiPayout}`, 'Session winnings must persist across hands');
+
+            // Finish Hand 2 -> 3-way Straight split of $155 ($52 Mei-Ling, $52 Elon, $51 Player)
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+
+            const preRiverCall = await readTablePots();
+            const preCallPlayerStack = Number((preRiverCall.bySeat['player']?.stack || '$0').replace('$', ''));
+
+            // Sample Table Pots while Mei-Ling's final River turn is still playing
+            await page.evaluate(() => {
+              const snaps: Array<{
+                thinkingId: string;
+                playerPayout: string;
+                playerSession: string;
+                playerStack: string;
+                meiPayout: string;
+                meiSession: string;
+              }> = [];
+              (window as unknown as { __SPLIT_PLAYBACK_SNAPS__: typeof snaps }).__SPLIT_PLAYBACK_SNAPS__ = snaps;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  const pRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="player"]');
+                  const mRow = document.querySelector('#pots-window-body .pots-row[data-seat-id="meiling"]');
+                  snaps.push({
+                    thinkingId: thinking.getAttribute('data-opp-id') || '',
+                    playerPayout: pRow?.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    playerSession: pRow?.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                    playerStack: pRow?.querySelector('[data-col="stack"]')?.textContent?.trim() || '',
+                    meiPayout: mRow?.querySelector('[data-col="hand-payout"]')?.textContent?.trim() || '',
+                    meiSession: mRow?.querySelector('[data-col="session-winnings"]')?.textContent?.trim() || '',
+                  });
+                }
+              }, 25);
+              (window as unknown as { __SPLIT_PLAYBACK_TIMER__: ReturnType<typeof setInterval> }).__SPLIT_PLAYBACK_TIMER__ = timer;
+            });
+
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await page.waitForSelector('.character-container.is-thinking[data-opp-id="meiling"]', { timeout: 5000 });
+            await waitForPromptReady(page, 'Play another hand?');
+
+            const playbackSnaps = await page.evaluate(() => {
+              clearInterval(
+                (window as unknown as { __SPLIT_PLAYBACK_TIMER__: ReturnType<typeof setInterval> }).__SPLIT_PLAYBACK_TIMER__,
+              );
+              return (
+                window as unknown as {
+                  __SPLIT_PLAYBACK_SNAPS__: Array<{
+                    thinkingId: string;
+                    playerPayout: string;
+                    playerSession: string;
+                    playerStack: string;
+                    meiPayout: string;
+                    meiSession: string;
+                  }>;
+                }
+              ).__SPLIT_PLAYBACK_SNAPS__;
+            });
+            assert.ok(playbackSnaps.length > 0, 'Expected to observe Mei-Ling thinking on River before settlement');
+            for (const snap of playbackSnaps) {
+              assert.equal(snap.thinkingId, 'meiling');
+              assert.equal(snap.playerPayout, '—', 'Hand Payout must stay cleared while Mei-Ling is still thinking');
+              assert.equal(snap.playerSession, '$0', `Player Session Winnings must stay $0 during playback, saw: ${snap.playerSession}`);
+              assert.equal(snap.playerStack, `$${preCallPlayerStack - 40}`, 'Player stack must stay pre-settlement during playback');
+              assert.equal(snap.meiPayout, '—');
+              assert.equal(snap.meiSession, `$${h1MeiPayout}`, `Mei-Ling Session Winnings must stay $${h1MeiPayout} during playback, saw: ${snap.meiSession}`);
+            }
+
+            const afterH2 = await readTablePots();
+            assert.equal(afterH2.bySeat['meiling']?.payout, '$52', 'Mei-Ling Hand 2 payout must include odd chip ($52)');
+            assert.equal(afterH2.bySeat['meiling']?.session, `$${h1MeiPayout + 52}`, 'Mei-Ling Session Winnings must equal Hand 1 + Hand 2');
+            assert.equal(afterH2.bySeat['elon']?.payout, '$52', 'Elon Hand 2 payout must include odd chip ($52)');
+            assert.equal(afterH2.bySeat['elon']?.session, '$52');
+            assert.equal(afterH2.bySeat['player']?.payout, '$51', 'Player Hand 2 payout must be $51');
+            assert.equal(afterH2.bySeat['player']?.session, '$51');
+            assert.equal(afterH2.bySeat['player']?.stack, `$${preCallPlayerStack - 40 + 51}`, 'Player stack must update together with payouts at showdown');
+            assert.equal(afterH2.bySeat['reginald']?.payout, '$0');
+            assert.equal(afterH2.bySeat['buck']?.payout, '$0');
+          },
+          {
+            turnSpeed: 0.15,
+            engineOptions: {
+              initialButtonSeatIndex: 4,
+              random: () => 0.99,
+              deckFactory,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }
