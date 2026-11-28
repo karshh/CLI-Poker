@@ -1078,6 +1078,7 @@
   const elPotsToggleBtn = document.getElementById('pots-toggle-btn');
   const elPickOpponentsBtn = document.getElementById('pick-opponents-btn');
   const elSpeedToggleBtn = document.getElementById('speed-toggle-btn');
+  const elCameraZoomToggleBtn = document.getElementById('camera-zoom-toggle-btn');
   const elSkipPlaybackBtn = document.getElementById('skip-playback-btn');
 
   // Hidable Table Pots Window Elements
@@ -1133,6 +1134,7 @@
   const elDrawerContent = document.getElementById('drawer-content');
 
   // Cinematic Opponent-Turn Camera Rig Elements & State
+  const CAMERA_ZOOM_STORAGE_KEY = 'high_roller_camera_zoom';
   const elPovViewport = document.querySelector('.pov-viewport');
   const elPovPerspective = document.querySelector('.pov-perspective-container');
   const elTableCamera = document.getElementById('table-camera');
@@ -1140,6 +1142,62 @@
   const elPlayerPovArea = document.querySelector('.player-pov-area');
   let tableBaseScale = 1;
   let cameraFocusedOppId = null;
+  let activeThinkingOppId = null;
+
+  function readSavedCameraZoomPreference() {
+    try {
+      const saved = window.localStorage ? window.localStorage.getItem(CAMERA_ZOOM_STORAGE_KEY) : null;
+      if (saved === 'false') return false;
+      if (saved === 'true') return true;
+    } catch {
+      // Ignore blocked storage
+    }
+    return true;
+  }
+
+  function writeSavedCameraZoomPreference(enabled) {
+    try {
+      if (window.localStorage) {
+        window.localStorage.setItem(CAMERA_ZOOM_STORAGE_KEY, String(Boolean(enabled)));
+      }
+    } catch {
+      // Ignore blocked storage
+    }
+  }
+
+  let cameraZoomEnabled = readSavedCameraZoomPreference();
+
+  function syncCameraZoomToggleUI(enabled) {
+    const isEnabled = Boolean(enabled);
+    if (!elCameraZoomToggleBtn) return;
+    elCameraZoomToggleBtn.textContent = isEnabled ? '🎥 Zoom: On' : '🎥 Zoom: Off';
+    elCameraZoomToggleBtn.setAttribute('aria-pressed', String(isEnabled));
+    elCameraZoomToggleBtn.dataset.zoomEnabled = String(isEnabled);
+    elCameraZoomToggleBtn.classList.toggle('active', isEnabled);
+    elCameraZoomToggleBtn.title = isEnabled
+      ? 'Disable opponent turn camera zoom (Z)'
+      : 'Enable opponent turn camera zoom (Z)';
+  }
+
+  function setCameraZoomEnabled(enabled) {
+    cameraZoomEnabled = Boolean(enabled);
+    writeSavedCameraZoomPreference(cameraZoomEnabled);
+    syncCameraZoomToggleUI(cameraZoomEnabled);
+    if (!cameraZoomEnabled) {
+      resetCameraZoom();
+    } else if (isPlayingTurns && activeThinkingOppId && !skipCurrentPlayback) {
+      focusCameraOnOpponent(activeThinkingOppId);
+    }
+    return cameraZoomEnabled;
+  }
+
+  syncCameraZoomToggleUI(cameraZoomEnabled);
+  if (elCameraZoomToggleBtn) {
+    elCameraZoomToggleBtn.addEventListener('click', () => {
+      ensureAudio();
+      setCameraZoomEnabled(!cameraZoomEnabled);
+    });
+  }
 
   function getCameraTransitionMs(baseMs, immediate = false) {
     if (immediate || skipCurrentPlayback) return 0;
@@ -1169,6 +1227,7 @@
   }
 
   function focusCameraOnOpponent(oppId, options = {}) {
+    if (!cameraZoomEnabled) return;
     if (!elPovViewport || !elPovPerspective || !elTableCamera || !elTableScene) return;
     const seatEl = findSeatContainerByOppId(oppId);
     if (!seatEl) return;
@@ -2317,17 +2376,19 @@
         }
 
         setOpponentThinking(event);
+        activeThinkingOppId = event.opponentId;
         if (livePots.opponents[event.opponentId]) {
           livePots.opponents[event.opponentId].thinking = true;
           renderPotsWindow(nextState, livePots);
         }
-        if (!skipCurrentPlayback) {
+        if (!skipCurrentPlayback && cameraZoomEnabled) {
           focusCameraOnOpponent(event.opponentId);
         }
 
         const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
         await delay(thinkDurationMs);
 
+        activeThinkingOppId = null;
         applyOpponentDecision(event, { suppressSfx: skipCurrentPlayback });
         livePots.pot = event.potAfter;
         const prevLiveOpp = livePots.opponents[event.opponentId];
@@ -2345,6 +2406,7 @@
         await delay(650);
       }
     } finally {
+      activeThinkingOppId = null;
       resetCameraZoom({ immediate: true });
     }
 
@@ -2724,6 +2786,11 @@
 
     if (key === 'p') {
       togglePotsWindow(undefined, { restoreFocus: true });
+      return;
+    }
+    if (key === 'z') {
+      ensureAudio();
+      setCameraZoomEnabled(!cameraZoomEnabled);
       return;
     }
     if (key === 's' && isPlayingTurns) {

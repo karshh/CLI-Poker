@@ -3854,6 +3854,87 @@ test(
               viewportZoomed: false,
               focusedSeats: 0,
             });
+
+            // Verify Zoom toggle button defaults to On, disables zooming & persists across reload, and can re-enable / cancel mid-turn
+            const zoomToggleBtn = page.locator('#camera-zoom-toggle-btn');
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: On');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'true');
+
+            await zoomToggleBtn.click();
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'false');
+            assert.equal(await zoomToggleBtn.getAttribute('data-zoom-enabled'), 'false');
+
+            // Reload and confirm Zoom: Off persists in localStorage
+            await page.reload({ waitUntil: 'networkidle' });
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'false');
+
+            // Observe camera while opponents act on the next street with Zoom disabled -> camera must NEVER zoom in
+            await page.evaluate(() => {
+              let sawZoom = false;
+              let sawThinking = false;
+              (window as unknown as { __DISABLED_ZOOM_CHECK__: () => { sawZoom: boolean; sawThinking: boolean } }).__DISABLED_ZOOM_CHECK__ =
+                () => ({ sawZoom, sawThinking });
+              const cam = document.getElementById('table-camera');
+              const scene = document.querySelector('.table-scene');
+              if (cam) {
+                new MutationObserver(() => {
+                  if (cam.classList.contains('is-zoomed') || cam.dataset['cameraState'] === 'focused') {
+                    sawZoom = true;
+                  }
+                }).observe(cam, { attributes: true, attributeFilter: ['class', 'data-camera-state'] });
+              }
+              if (scene) {
+                new MutationObserver(() => {
+                  if (document.querySelector('.character-container.is-thinking')) {
+                    sawThinking = true;
+                  }
+                }).observe(scene, { attributes: true, subtree: true, attributeFilter: ['class'] });
+              }
+            });
+
+            const flopCheck = page.locator('#action-buttons-group button[data-choice-id="check"]');
+            const flopCall = page.locator('#action-buttons-group button[data-choice-id="call"]');
+            if ((await flopCheck.count()) > 0) {
+              await flopCheck.click();
+            } else {
+              await flopCall.click();
+            }
+            await waitForPromptReady(page, 'Turn');
+
+            const disabledResult = await page.evaluate(() =>
+              (
+                window as unknown as { __DISABLED_ZOOM_CHECK__: () => { sawZoom: boolean; sawThinking: boolean } }
+              ).__DISABLED_ZOOM_CHECK__(),
+            );
+            assert.equal(disabledResult.sawThinking, true, 'Expected opponent turns to play while Zoom is Off');
+            assert.equal(disabledResult.sawZoom, false, 'Camera must NOT zoom in while Zoom toggle is Off');
+
+            // Re-enable Zoom via keyboard shortcut Z, trigger River opponent playback, and disable Zoom MID-TURN -> must zoom right back out!
+            await page.keyboard.press('z');
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: On');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'true');
+
+            const turnCheck = page.locator('#action-buttons-group button[data-choice-id="check"]');
+            const turnCall = page.locator('#action-buttons-group button[data-choice-id="call"]');
+            if ((await turnCheck.count()) > 0) {
+              await turnCheck.click();
+            } else {
+              await turnCall.click();
+            }
+            await page.waitForSelector('#table-camera.is-zoomed', { timeout: 5000 });
+            await zoomToggleBtn.click();
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            const midTurnDisabled = await page.evaluate(() => {
+              const cam = document.getElementById('table-camera');
+              return {
+                state: cam?.dataset['cameraState'] || '',
+                zoom: Number(cam?.dataset['cameraZoom'] || '0'),
+                isZoomed: Boolean(cam?.classList.contains('is-zoomed')),
+              };
+            });
+            assert.deepEqual(midTurnDisabled, { state: 'idle', zoom: 1, isZoomed: false });
           },
           {
             turnSpeed: 0.25,
