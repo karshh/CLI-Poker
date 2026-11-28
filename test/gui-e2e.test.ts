@@ -2926,6 +2926,261 @@ test(
       });
 
       // ----------------------------------------------------------------------
+      // TEST 16: Issue #22 — Hand Rank Updates Immediately During New-Hand & Street Playback
+      // ----------------------------------------------------------------------
+      await t.test('hand rank updates immediately on new-hand deal and street transitions during opponent playback, matching Skip final rank', async () => {
+        let handIdx = 0;
+        const deckFactory = () => {
+          handIdx += 1;
+          if (handIdx === 1) {
+            const cards = [
+              new Card('♥', 'A'), new Card('♥', '2'), // Player: Straight (wins Hand 1)
+              new Card('♣', '9'), new Card('♦', '8'),
+              new Card('♠', 'J'), new Card('♣', '6'),
+              new Card('♦', 'Q'), new Card('♣', '10'),
+              new Card('♠', '8'), new Card('♦', '7'),
+              new Card('♠', '3'), new Card('♦', '4'), new Card('♣', '5'), // Flop -> Straight
+              new Card('♠', '9'), // Turn
+              new Card('♣', 'K'), // River
+            ];
+            return { draw: () => cards.shift()! };
+          }
+          const cards = [
+            new Card('♦', 'K'), new Card('♣', '7'), // Player: High Card K -> One pair on Flop -> Two pair on Turn
+            new Card('♠', 'Q'), new Card('♦', '9'),
+            new Card('♥', 'J'), new Card('♣', '8'),
+            new Card('♠', '10'), new Card('♥', '9'),
+            new Card('♦', 'J'), new Card('♠', '8'),
+            new Card('♦', '7'), new Card('♣', '6'), new Card('♠', '4'), // Flop -> One pair
+            new Card('♠', 'K'), // Turn -> Two pair
+            new Card('♥', '2'), // River
+          ];
+          return { draw: () => cards.shift()! };
+        };
+
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="tony"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // Play Hand 1 to Showdown where Player wins with a Straight
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Turn');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'River');
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            assert.match((await page.locator('#player-hand-rank').textContent())?.trim() || '', /^Your Hand: Straight/);
+
+            // Observe #player-hand-rank during Hand 2 opening preflop playback (BTN rotates -> tony acts before player)
+            await page.evaluate(() => {
+              const snaps: Array<{ banner: string; boardCount: number; rank: string; thinkingId: string }> = [];
+              (window as unknown as { __RANK_SNAPS__: typeof snaps }).__RANK_SNAPS__ = snaps;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  snaps.push({
+                    banner: document.getElementById('street-banner')?.textContent?.trim() || '',
+                    boardCount: document.querySelectorAll('#community-cards-container .card').length,
+                    rank: document.getElementById('player-hand-rank')?.textContent?.trim() || '',
+                    thinkingId: thinking.getAttribute('data-opp-id') || '',
+                  });
+                }
+              }, 25);
+              (window as unknown as { __RANK_TIMER__: ReturnType<typeof setInterval> }).__RANK_TIMER__ = timer;
+            });
+
+            await page.locator('#action-buttons-group button[data-choice-id="yes"]').click();
+            await page.waitForSelector('.character-container.is-thinking', { timeout: 5000 });
+            await waitForPromptReady(page, 'Pre-flop');
+
+            const preflopSnaps = await page.evaluate(() => {
+              clearInterval((window as unknown as { __RANK_TIMER__: ReturnType<typeof setInterval> }).__RANK_TIMER__);
+              return (
+                window as unknown as {
+                  __RANK_SNAPS__: Array<{ banner: string; boardCount: number; rank: string; thinkingId: string }>;
+                }
+              ).__RANK_SNAPS__;
+            });
+            assert.ok(preflopSnaps.length > 0, 'Expected to observe preflop opponent playback on Hand 2');
+            for (const snap of preflopSnaps) {
+              assert.equal(snap.boardCount, 0);
+              assert.equal(
+                snap.rank,
+                'Your Hand: High Card K',
+                `Preflop playback rank must immediately show High Card K (not previous hand Straight), saw: ${snap.rank}`,
+              );
+            }
+
+            // Call Pre-flop -> watch Flop dealing and Flop opponent playback before player's Flop prompt returns
+            await page.evaluate(() => {
+              const snaps: Array<{ banner: string; boardCount: number; rank: string; thinkingId: string }> = [];
+              (window as unknown as { __FLOP_RANK_SNAPS__: typeof snaps }).__FLOP_RANK_SNAPS__ = snaps;
+              const timer = setInterval(() => {
+                const thinking = document.querySelector('.character-container.is-thinking');
+                if (thinking) {
+                  snaps.push({
+                    banner: document.getElementById('street-banner')?.textContent?.trim() || '',
+                    boardCount: document.querySelectorAll('#community-cards-container .card').length,
+                    rank: document.getElementById('player-hand-rank')?.textContent?.trim() || '',
+                    thinkingId: thinking.getAttribute('data-opp-id') || '',
+                  });
+                }
+              }, 25);
+              (window as unknown as { __FLOP_RANK_TIMER__: ReturnType<typeof setInterval> }).__FLOP_RANK_TIMER__ = timer;
+            });
+
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await waitForPromptReady(page, 'Flop');
+
+            const flopPlaybackSnaps = await page.evaluate(() => {
+              clearInterval((window as unknown as { __FLOP_RANK_TIMER__: ReturnType<typeof setInterval> }).__FLOP_RANK_TIMER__);
+              return (
+                window as unknown as {
+                  __FLOP_RANK_SNAPS__: Array<{ banner: string; boardCount: number; rank: string; thinkingId: string }>;
+                }
+              ).__FLOP_RANK_SNAPS__;
+            });
+            const preflopAfterCall = flopPlaybackSnaps.filter((s) => s.boardCount === 0);
+            const flopDuringPlayback = flopPlaybackSnaps.filter((s) => s.boardCount === 3);
+            assert.ok(flopDuringPlayback.length > 0, 'Expected Flop opponent thinking snapshots during playback');
+            for (const snap of preflopAfterCall) {
+              assert.equal(
+                snap.rank,
+                'Your Hand: High Card K',
+                `Rank must not spoil Flop category before Flop cards appear, saw: ${snap.rank}`,
+              );
+            }
+            for (const snap of flopDuringPlayback) {
+              assert.equal(snap.banner, 'FLOP');
+              assert.equal(
+                snap.rank,
+                'Your Hand: One pair',
+                `Flop playback rank must immediately update to One pair when Flop cards deal, saw: ${snap.rank}`,
+              );
+            }
+            assert.equal((await page.locator('#player-hand-rank').textContent())?.trim(), 'Your Hand: One pair');
+
+            // Check Flop -> Turn deals K♠ (Two pair) -> use Skip during Turn playback and verify final rank matches
+            await page.locator('#action-buttons-group button[data-choice-id="check"]').click();
+            const skipBtn = page.locator('#skip-playback-btn');
+            await skipBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await skipBtn.click();
+            await waitForPromptReady(page, 'Turn');
+            assert.equal((await page.locator('#player-hand-rank').textContent())?.trim(), 'Your Hand: Two pair');
+          },
+          {
+            turnSpeed: 0.2,
+            engineOptions: {
+              initialButtonSeatIndex: 0,
+              random: () => 0.5,
+              deckFactory,
+            },
+          },
+        );
+      });
+
+      // ----------------------------------------------------------------------
+      // TEST 17: Issue #26 — Escape Closes Game History Directly From Focused Log Trigger
+      // ----------------------------------------------------------------------
+      await t.test('Escape closes Game History immediately from focused Log button while preserving Table Pots and opponent picker Escape behavior', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('#btn-random-opponents').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+            await waitForPromptReady(page, 'Pre-flop');
+
+            // 1. Focus #log-toggle-btn, open Game History via Enter (without tabbing inside), and press Escape
+            await page.locator('#log-toggle-btn').focus();
+            await page.keyboard.press('Enter');
+            const openedFromTrigger = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                expanded: logBtn.getAttribute('aria-expanded'),
+              };
+            });
+            assert.equal(openedFromTrigger.activeId, 'log-toggle-btn');
+            assert.equal(openedFromTrigger.open, true);
+            assert.equal(openedFromTrigger.inert, false);
+            assert.equal(openedFromTrigger.ariaHidden, 'false');
+            assert.equal(openedFromTrigger.expanded, 'true');
+
+            await page.keyboard.press('Escape');
+            const closedFromTrigger = await page.evaluate(() => {
+              const drawer = document.getElementById('history-drawer') as HTMLElement;
+              const logBtn = document.getElementById('log-toggle-btn') as HTMLButtonElement;
+              const pots = document.getElementById('pots-window') as HTMLElement;
+              return {
+                activeId: document.activeElement?.id || '',
+                open: drawer.classList.contains('open'),
+                inert: drawer.inert,
+                ariaHidden: drawer.getAttribute('aria-hidden'),
+                expanded: logBtn.getAttribute('aria-expanded'),
+                potsStillOpen: pots.classList.contains('open'),
+              };
+            });
+            assert.equal(closedFromTrigger.open, false, 'Escape from focused Log button must close Game History');
+            assert.equal(closedFromTrigger.inert, true);
+            assert.equal(closedFromTrigger.ariaHidden, 'true');
+            assert.equal(closedFromTrigger.expanded, 'false');
+            assert.equal(closedFromTrigger.activeId, 'log-toggle-btn');
+            assert.equal(closedFromTrigger.potsStillOpen, true, 'Closing Game History must leave Table Pots open');
+
+            // 2. Open via click on #log-toggle-btn and press Escape immediately without tabbing into drawer
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.locator('#log-toggle-btn').getAttribute('aria-expanded'), 'false');
+
+            // 3. When BOTH Table Pots and Game History are open:
+            //    - Pressing Escape from inside Table Pots closes Table Pots (focus -> #pots-toggle-btn) and leaves Game History open
+            //    - Pressing Escape from inside Game History then closes Game History and returns focus to #log-toggle-btn
+            await page.locator('#log-toggle-btn').click();
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), true);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+
+            await page.locator('#pots-window-close').focus();
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#pots-window').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'pots-toggle-btn');
+
+            await page.locator('#drawer-close').focus();
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), false);
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => (el as HTMLElement).inert), true);
+            assert.equal(await page.evaluate(() => document.activeElement?.id), 'log-toggle-btn');
+
+            // 4. Between hands: when opponent picker dialog is open alongside Game History, Escape dismisses the dialog first
+            await page.locator('#action-buttons-group button[data-choice-id="fold"]').click();
+            await waitForPromptReady(page, 'Play another hand?');
+            await page.locator('#log-toggle-btn').click();
+            await page.locator('#pick-opponents-btn').click();
+            await page.waitForSelector('dialog#opponent-modal-overlay[open]');
+            await page.keyboard.press('Escape');
+            await page.waitForSelector('dialog#opponent-modal-overlay', { state: 'hidden' });
+            assert.equal(await page.locator('#history-drawer').evaluate((el) => el.classList.contains('open')), true);
+          },
+          { turnSpeed: 0.02 },
+        );
+      });
+
+      // ----------------------------------------------------------------------
       // TEST 16: Issue #25 — Current-Hand Payouts Shown Separately From Session Winnings
       // ----------------------------------------------------------------------
       await t.test('Table Pots displays Hand Payout separately from Session Winnings across multiway odd-chip splits and clears on next hand', async () => {
