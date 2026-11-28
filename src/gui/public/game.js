@@ -2369,14 +2369,28 @@
     }
 
     if (key === 'escape') {
-      if (elHistoryDrawer && elHistoryDrawer.classList.contains('open') && elHistoryDrawer.contains(document.activeElement)) {
+      const activeEl = document.activeElement;
+      const historyOpen = Boolean(elHistoryDrawer && elHistoryDrawer.classList.contains('open'));
+      const potsOpen = Boolean(elPotsWindow && elPotsWindow.classList.contains('open'));
+      const focusInHistoryDrawer = Boolean(activeEl && elHistoryDrawer && elHistoryDrawer.contains(activeEl));
+      const focusOnLogToggle = Boolean(
+        activeEl && elLogToggleBtn && (activeEl === elLogToggleBtn || elLogToggleBtn.contains(activeEl)),
+      );
+      const focusInPots = Boolean(activeEl && elPotsWindow && elPotsWindow.contains(activeEl));
+
+      if (historyOpen && (focusInHistoryDrawer || focusOnLogToggle)) {
         e.preventDefault();
         setHistoryDrawerOpen(false, { restoreFocus: true });
         return;
       }
-      if (elPotsWindow && elPotsWindow.classList.contains('open') && elPotsWindow.contains(document.activeElement)) {
+      if (potsOpen && focusInPots) {
         e.preventDefault();
         togglePotsWindow(false, { restoreFocus: true });
+        return;
+      }
+      if (historyOpen) {
+        e.preventDefault();
+        setHistoryDrawerOpen(false, { restoreFocus: false });
         return;
       }
     }
