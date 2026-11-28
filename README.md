@@ -59,7 +59,7 @@ The final image contains only the compiled app and Node.js runtime, runs as the 
 
 ## Playing (Terminal CLI Mode)
 
-The terminal CLI mode (`npm start`) is a simplified, fixed-bet, heads-up Texas Hold’em game. You and the machine receive two private cards; the board is dealt as a three-card flop, one-card turn, and one-card river. The best five-card hand made from your two cards and the board wins. Unlike the 5-handed GUI mode (which includes `$5`/`$10` blinds, one fixed raise per street, and all-in side pots), each street in terminal mode allows at most one fixed bet (`$10`/`$20`/`$30`/`$40`), with no blinds, raises, or side pots.
+The terminal CLI mode (`npm start`) is a simplified, fixed-bet, heads-up Texas Hold’em game. You and the machine receive two private cards; the board is dealt as a three-card flop, one-card turn, and one-card river. The best five-card hand made from your two cards and the board wins. Unlike the 5-handed GUI mode (which includes `$5`/`$10` blinds, one fixed bet or raise per street, and all-in side pots), each street in terminal mode allows at most one fixed bet (`$10`/`$20`/`$30`/`$40`), with no blinds, raises, or side pots.
 
 At launch, choose a difficulty by entering `easy`, `medium`, or `hard`. During each betting decision, enter one of the choices shown in the prompt:
 

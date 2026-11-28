@@ -2938,7 +2938,7 @@ test(
                 assert.ok(modalCue.left >= 0 && modalCue.right <= modalCue.vw + 1);
                 assert.match(modalCue.text, /\$5\/\$10 blinds/);
                 assert.match(modalCue.text, /\$10 Pre-flop \/ \$20 Flop \/ \$30 Turn \/ \$40 River/);
-                assert.match(modalCue.text, /Max 1 raise per street/);
+                assert.match(modalCue.text, /One bet or raise per street/);
 
                 // 3. After choosing opponents (select_mode, still before first deal), #predeal-rules-cue is visible and unclipped
                 await page.locator('#btn-random-opponents').click();
@@ -2962,7 +2962,7 @@ test(
                 assert.ok(predealCue.left >= 0 && predealCue.right <= predealCue.vw + 1);
                 assert.match(predealCue.text, /\$5\/\$10 blinds/);
                 assert.match(predealCue.text, /\$10 Pre-flop \/ \$20 Flop \/ \$30 Turn \/ \$40 River/);
-                assert.match(predealCue.text, /Max 1 raise per street/);
+                assert.match(predealCue.text, /One bet or raise per street/);
 
                 // 4. Once Hand 1 is dealt, #predeal-rules-cue hides cleanly
                 await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();

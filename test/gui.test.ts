@@ -1668,6 +1668,6 @@ test('PokerGameEngine exposes fixed-limit bettingRules matching engine blinds, s
       { street: 'Turn', bet: 30 },
       { street: 'River', bet: 40 },
     ],
-    maxRaisesPerStreet: 1,
+    maxBetsOrRaisesPerStreet: 1,
   });
 });

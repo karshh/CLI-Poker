@@ -185,7 +185,7 @@ export interface TableBettingRules {
   smallBlind: number;
   bigBlind: number;
   streetBets: { street: string; bet: number }[];
-  maxRaisesPerStreet: number;
+  maxBetsOrRaisesPerStreet: number;
 }
 
 export interface SessionSummary {
@@ -803,7 +803,7 @@ export class PokerGameEngine {
         smallBlind: this.smallBlind,
         bigBlind: this.bigBlind,
         streetBets: STREETS.map((s) => ({ street: s.name, bet: s.bet })),
-        maxRaisesPerStreet: 1,
+        maxBetsOrRaisesPerStreet: 1,
       },
       currentBet: effectiveCurrentBet,
       pot: this.pot,

@@ -2104,10 +2104,14 @@
             { street: 'Turn', bet: 30 },
             { street: 'River', bet: 40 },
           ];
-    const maxRaises = rules && typeof rules.maxRaisesPerStreet === 'number' ? rules.maxRaisesPerStreet : 1;
+    const maxBetsOrRaises =
+      rules && typeof rules.maxBetsOrRaisesPerStreet === 'number' ? rules.maxBetsOrRaisesPerStreet : 1;
     const streetText = streetBets.map((entry) => `$${entry.bet} ${entry.street}`).join(' / ');
-    const raiseWord = maxRaises === 1 ? 'raise' : 'raises';
-    return `<strong>Fixed-Limit Rules:</strong> $${sb}/$${bb} blinds • Fixed bets: ${streetText} • Max ${maxRaises} ${raiseWord} per street.`;
+    const capText =
+      maxBetsOrRaises === 1
+        ? 'One bet or raise per street.'
+        : `Max ${maxBetsOrRaises} bets or raises per street.`;
+    return `<strong>Fixed-Limit Rules:</strong> $${sb}/$${bb} blinds • Fixed bets: ${streetText} • ${capText}`;
   }
 
   function renderBettingRulesCue(state) {
