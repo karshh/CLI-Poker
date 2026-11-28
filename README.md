@@ -35,6 +35,7 @@ Running `npm run gui` launches a graphical first-person POV (point-of-view) Texa
 - **Dealer (Vincent)**: Seated at center-back of the table managing the chip rack, dealing community cards, and narrating showdown results.
 - **8 VIP Opponents (Choose 4 per Table)**: Before starting a game, pick any 4 of 8 distinct illustrated opponents (or deal a random 4) — **Lord Reginald**, **"Big Oil" Buck**, **"Croc" Bruce**, **Elon Musk**, **Comrade Viktor**, **Madame Mei-Ling**, **Don "Big Tony"**, and **Sheikh Tariq** — each with themed chairs, overhead name+stack cards, distinct accents, sequential 1–2 second thinking & decision chat bubbles positioned between card and seat, private cards for active in-hand opponents, immediate card reveals when an opponent folds, and full table reveals at hand end (including after player fold).
 - **Rotating 5-Handed Table Positions & Blinds**: Every hand assigns **Dealer Button (`BTN`)**, **Small Blind (`SB`, `$5`)**, **Big Blind (`BB`, `$10`)**, **Under the Gun (`UTG`)**, and **Cutoff (`CO`)** clockwise around the 5 seats—rotating by 1 seat every new hand with a moving physical Dealer Button (`D`) puck, color-coded seat badges, and authentic `UTG`-first pre-flop / `SB`-first post-flop action order.
+- **Fixed-Limit Betting Rules**: Unlike No-Limit Hold'em (and unlike the heads-up terminal CLI mode below, which has no blinds, raises, or side pots), the GUI lounge uses fixed-limit betting with `$5`/`$10` blinds, fixed street increments (`$10` Pre-flop, `$20` Flop, `$30` Turn, `$40` River), a cap of **one bet or raise per street**, and all-in side pots when a seat is short-stacked.
 - **Hidable Table Pots Window**: Toggleable floating tracker (`P` or `💰 Table Pots`) showing each opponent's current hand contribution, total pots won, and chip stack live as turns unfold.
 - **Cinematic HUD**: Bottom panel displays live narrative dialogue, full win/loss hand comparisons, expandable game log, and action buttons.
 - **Hotkeys**: `C` (Check/Call), `B` (Bet), `F` (Fold), `1`/`2`/`3` (Difficulty), `R` (Random 4 Opponents), `P` (Toggle Table Pots window), `Space` (Play Again), `M` (Mute/Unmute).
@@ -56,9 +57,9 @@ docker run --rm -it high-roller-holdem
 
 The final image contains only the compiled app and Node.js runtime, runs as the unprivileged `node` user, and does not expose network ports.
 
-## Playing
+## Playing (Terminal CLI Mode)
 
-This is a simplified, fixed-bet, heads-up Texas Hold’em game. You and the machine receive two private cards; the board is dealt as a three-card flop, one-card turn, and one-card river. The best five-card hand made from your two cards and the board wins. Each street allows at most one fixed bet, so there are no blinds, raises, or side pots.
+The terminal CLI mode (`npm start`) is a simplified, fixed-bet, heads-up Texas Hold’em game. You and the machine receive two private cards; the board is dealt as a three-card flop, one-card turn, and one-card river. The best five-card hand made from your two cards and the board wins. Unlike the 5-handed GUI mode (which includes `$5`/`$10` blinds, one fixed raise per street, and all-in side pots), each street in terminal mode allows at most one fixed bet (`$10`/`$20`/`$30`/`$40`), with no blinds, raises, or side pots.
 
 At launch, choose a difficulty by entering `easy`, `medium`, or `hard`. During each betting decision, enter one of the choices shown in the prompt:
 

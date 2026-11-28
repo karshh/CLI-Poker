@@ -1651,3 +1651,23 @@ test('PokerGameEngine finishShowdown explains equal-category wins (higher rank &
   assert.deepEqual(diffBoardState.outcome?.bestFiveCards, ['A♣', 'K♦', 'J♣', '10♥', '8♥']);
   assert.deepEqual(diffBoardState.outcome?.winningBestFiveCards, ['A♣', 'K♦', 'Q♥', '8♥', '6♠']);
 });
+
+test('PokerGameEngine exposes fixed-limit bettingRules matching engine blinds, street increments, and one raise per street', () => {
+  const engine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+  });
+  const state = engine.getState();
+  assert.deepEqual(state.bettingRules, {
+    limitType: 'fixed',
+    smallBlind: 5,
+    bigBlind: 10,
+    streetBets: [
+      { street: 'Pre-flop', bet: 10 },
+      { street: 'Flop', bet: 20 },
+      { street: 'Turn', bet: 30 },
+      { street: 'River', bet: 40 },
+    ],
+    maxRaisesPerStreet: 1,
+  });
+});

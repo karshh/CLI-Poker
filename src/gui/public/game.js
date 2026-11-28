@@ -1092,6 +1092,8 @@
   const elBtnCancelOpps = document.getElementById('btn-cancel-opponents');
   const elBtnRandomOpps = document.getElementById('btn-random-opponents');
   const elBtnConfirmOpps = document.getElementById('btn-confirm-opponents');
+  const elModalRulesCue = document.getElementById('modal-rules-cue');
+  const elPredealRulesCue = document.getElementById('predeal-rules-cue');
 
   const elDealerBubble = document.getElementById('dealer-speech-bubble');
   const elDealerBubbleText = document.getElementById('dealer-bubble-text');
@@ -1912,6 +1914,7 @@
     if (nextState.stage !== 'select_opponents') {
       closeOpponentDialog();
     }
+    renderBettingRulesCue(nextState);
 
     isPlayingTurns = true;
     skipCurrentPlayback = false;
@@ -2088,10 +2091,42 @@
     }
   }
 
+  function buildBettingRulesCueHTML(state) {
+    const rules = state && state.bettingRules ? state.bettingRules : null;
+    const sb = rules && typeof rules.smallBlind === 'number' ? rules.smallBlind : state && typeof state.smallBlind === 'number' ? state.smallBlind : 5;
+    const bb = rules && typeof rules.bigBlind === 'number' ? rules.bigBlind : state && typeof state.bigBlind === 'number' ? state.bigBlind : 10;
+    const streetBets =
+      rules && Array.isArray(rules.streetBets) && rules.streetBets.length > 0
+        ? rules.streetBets
+        : [
+            { street: 'Pre-flop', bet: 10 },
+            { street: 'Flop', bet: 20 },
+            { street: 'Turn', bet: 30 },
+            { street: 'River', bet: 40 },
+          ];
+    const maxRaises = rules && typeof rules.maxRaisesPerStreet === 'number' ? rules.maxRaisesPerStreet : 1;
+    const streetText = streetBets.map((entry) => `$${entry.bet} ${entry.street}`).join(' / ');
+    const raiseWord = maxRaises === 1 ? 'raise' : 'raises';
+    return `<strong>Fixed-Limit Rules:</strong> $${sb}/$${bb} blinds • Fixed bets: ${streetText} • Max ${maxRaises} ${raiseWord} per street.`;
+  }
+
+  function renderBettingRulesCue(state) {
+    const html = buildBettingRulesCueHTML(state);
+    if (elModalRulesCue) {
+      elModalRulesCue.innerHTML = html;
+    }
+    if (elPredealRulesCue) {
+      const showPredealCue = Boolean(state && (state.stage === 'select_opponents' || state.stage === 'select_mode'));
+      elPredealRulesCue.innerHTML = html;
+      elPredealRulesCue.hidden = !showPredealCue;
+    }
+  }
+
   // Render Game State
   function renderState(state, options = {}) {
     const prevState = currentState;
     currentState = state;
+    renderBettingRulesCue(state);
 
     if (elPickOpponentsBtn) {
       const pickerDisabled = isHandActiveStage(state.stage) || state.stage === 'game_over';
