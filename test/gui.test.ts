@@ -1927,6 +1927,26 @@ test('PokerGameEngine turnStartOpponents snapshots new-hand blind badges and cle
   assert.equal(riverEnd.playerTotalPotWon, 51, 'Settled playerTotalPotWon is $51');
 });
 
+test('PokerGameEngine exposes fixed-limit bettingRules matching engine blinds, street increments, and one raise per street', () => {
+  const engine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+  });
+  const state = engine.getState();
+  assert.deepEqual(state.bettingRules, {
+    limitType: 'fixed',
+    smallBlind: 5,
+    bigBlind: 10,
+    streetBets: [
+      { street: 'Pre-flop', bet: 10 },
+      { street: 'Flop', bet: 20 },
+      { street: 'Turn', bet: 30 },
+      { street: 'River', bet: 40 },
+    ],
+    maxBetsOrRaisesPerStreet: 1,
+  });
+});
+
 test('PokerGameEngine outcome.pots reports per-hand payouts separately from cumulative totalPotWon across multiway odd-chip splits and excludes uncalled returns', () => {
   // 1. Uncalled bet return with $0 blinds: playerPayout is 0 and no pot awards are emitted
   const foldDeck = () => {

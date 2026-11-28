@@ -491,6 +491,27 @@ html, body {
   color: #6ee7b7;
 }
 
+.table-rules-cue {
+  flex-shrink: 0;
+  padding: 7px 16px;
+  background: rgba(212, 175, 55, 0.12);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.3);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.table-rules-cue strong {
+  color: var(--gold-light);
+}
+.table-rules-cue.hud-rules-cue {
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  border-radius: 8px;
+  padding: 6px 14px;
+}
+.table-rules-cue[hidden] {
+  display: none !important;
+}
+
 .opponent-picker-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -2024,6 +2045,10 @@ html, body {
   .dialogue-text {
     font-size: 12px;
   }
+  .table-rules-cue {
+    font-size: 11px;
+    padding: 6px 12px;
+  }
   .session-summary-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 6px;
@@ -2121,6 +2146,11 @@ html, body {
   }
   .dialogue-text {
     font-size: 11px;
+    line-height: 1.25;
+  }
+  .table-rules-cue {
+    font-size: 10.5px;
+    padding: 4px 10px;
     line-height: 1.25;
   }
   .actions-panel {
