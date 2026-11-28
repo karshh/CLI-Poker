@@ -649,6 +649,32 @@ html, body {
   justify-content: center;
   z-index: 5;
 }
+.pov-viewport::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    transparent 42%,
+    rgba(6, 2, 4, 0.34) 78%,
+    rgba(4, 1, 2, 0.56) 100%
+  );
+  opacity: 0;
+  transition: opacity var(--camera-zoom-duration, 420ms) ease;
+}
+.pov-viewport.camera-zoomed::after {
+  opacity: 1;
+}
+.casino-painting,
+.chandelier {
+  transition: opacity var(--camera-zoom-duration, 420ms) ease;
+}
+.pov-viewport.camera-zoomed .casino-painting,
+.pov-viewport.camera-zoomed .chandelier {
+  opacity: 0;
+}
 
 .pov-perspective-container {
   position: relative;
@@ -662,17 +688,55 @@ html, body {
   justify-content: center;
 }
 
-/* Unified Scene anchoring all 5 seated characters & chairs behind the poker table */
-.table-scene {
+/* Cinematic Camera Rig wrapping the 3D table scene for opponent turn zoom-in / zoom-out */
+.table-camera {
   position: relative;
   width: 960px;
   height: 430px;
+  flex-shrink: 0;
   margin-top: 84px;
   display: flex;
   align-items: center;
   justify-content: center;
   transform-origin: center center;
+  transform: translate3d(0px, 0px, 0px) scale(1);
+  transition: transform var(--camera-zoom-duration, 480ms) cubic-bezier(0.22, 1, 0.36, 1);
+}
+.table-camera.is-zoomed {
+  will-change: transform;
+}
+.table-camera.camera-instant {
+  transition: none !important;
+}
+
+/* Unified Scene anchoring all 5 seated characters & chairs behind the poker table */
+.table-scene {
+  position: relative;
+  width: 960px;
+  height: 430px;
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
   transition: transform 0.3s ease;
+}
+
+.table-camera.is-zoomed .character-container:not(.camera-focused) {
+  opacity: 0.62;
+  filter: brightness(0.75);
+}
+.table-camera.is-zoomed .character-container.camera-focused {
+  z-index: 9;
+  opacity: 1;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .table-camera,
+  .pov-viewport::after {
+    transition: none !important;
+  }
 }
 
 /* ==========================================================================
@@ -1974,10 +2038,12 @@ html, body {
 
 /* Responsive adjustments (tablet & phone viewports down to 360px width) */
 @media (max-height: 780px) {
-  .table-scene { transform: scale(0.86); margin-top: 64px; }
+  .table-camera { margin-top: 64px; }
+  .table-scene { transform: scale(0.86); }
 }
 @media (max-height: 660px) {
-  .table-scene { transform: scale(0.74); margin-top: 48px; }
+  .table-camera { margin-top: 48px; }
+  .table-scene { transform: scale(0.74); }
 }
 @media (max-width: 1060px) {
   .table-scene { transform: scale(0.82); }
@@ -2003,9 +2069,11 @@ html, body {
     font-size: 11px;
     padding: 3px 9px;
   }
+  .table-camera {
+    margin-top: 24px;
+  }
   .table-scene {
     transform: scale(0.46);
-    margin-top: 24px;
   }
   .player-pov-area {
     padding: 0 12px;
@@ -2081,9 +2149,11 @@ html, body {
   }
 }
 @media (max-width: 480px) {
+  .table-camera {
+    margin-top: 10px;
+  }
   .table-scene {
     transform: scale(0.33);
-    margin-top: 10px;
   }
   .brand {
     font-size: 12px;
