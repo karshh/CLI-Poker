@@ -155,6 +155,7 @@ export interface TurnEvent {
   shortName: OpponentShortName;
   streetName: string;
   boardSnapshot: CardData[];
+  playerRankSnapshot?: string | null;
   thinkingSpeech: string;
   action: 'check' | 'bet' | 'call' | 'fold';
   amount?: number;
@@ -209,6 +210,7 @@ export interface SerializedGameState {
   turnStartPot: number;
   turnStartPlayerChips: number;
   turnStartPlayerContribution: number;
+  turnStartPlayerRank: string | null;
   turnStartOpponents: Record<string, TurnStartSeatSnapshot>;
   turnEvents: TurnEvent[];
   playerChips: number;
@@ -557,6 +559,7 @@ export class PokerGameEngine {
   private turnStartPot = 0;
   private turnStartPlayerChips = 0;
   private turnStartPlayerContribution = 0;
+  private turnStartPlayerRank: string | null = null;
   private turnStartOpponents: Record<string, TurnStartSeatSnapshot> = {};
   private turnEvents: TurnEvent[] = [];
 
@@ -590,10 +593,33 @@ export class PokerGameEngine {
     return [0, 1, 2, 3, 4].map((offset) => (startSeatIndex + offset) % 5);
   }
 
+  private computePlayerHandRank(
+    playerCards: readonly [Card, Card] | null,
+    board: readonly Card[],
+  ): string | null {
+    if (!playerCards) return null;
+    const cardsToEval = [...playerCards, ...board];
+    if (cardsToEval.length >= 5) {
+      return evaluateHand(cardsToEval).name;
+    }
+    if (playerCards[0] && playerCards[1]) {
+      if (playerCards[0].value === playerCards[1].value) {
+        return `Pocket Pair of ${playerCards[0].value}s`;
+      }
+      return `High Card ${
+        playerCards[0].getNumericValue() > playerCards[1].getNumericValue()
+          ? playerCards[0].value
+          : playerCards[1].value
+      }`;
+    }
+    return null;
+  }
+
   private captureTurnStartSnapshot(): void {
     this.turnStartPot = this.pot;
     this.turnStartPlayerChips = this.playerChips;
     this.turnStartPlayerContribution = this.playerHandContribution;
+    this.turnStartPlayerRank = this.computePlayerHandRank(this.playerCards, this.board);
     const oppSnap: Record<string, TurnStartSeatSnapshot> = {};
     for (const opp of this.opponents) {
       oppSnap[opp.profile.id] = {
@@ -731,23 +757,7 @@ export class PokerGameEngine {
   }
 
   public getState(): SerializedGameState {
-    let playerCurrentRank: string | null = null;
-    if (this.playerCards) {
-      const cardsToEval = [...this.playerCards, ...this.board];
-      if (cardsToEval.length >= 5) {
-        playerCurrentRank = evaluateHand(cardsToEval).name;
-      } else if (this.playerCards[0] && this.playerCards[1]) {
-        if (this.playerCards[0].value === this.playerCards[1].value) {
-          playerCurrentRank = `Pocket Pair of ${this.playerCards[0].value}s`;
-        } else {
-          playerCurrentRank = `High Card ${
-            this.playerCards[0].getNumericValue() > this.playerCards[1].getNumericValue()
-              ? this.playerCards[0].value
-              : this.playerCards[1].value
-          }`;
-        }
-      }
-    }
+    const playerCurrentRank = this.computePlayerHandRank(this.playerCards, this.board);
 
     const serializedOpponents = this.opponents.map((opp, idx) => this.serializeOpponent(opp, idx));
     const primaryIdx = this.opponents[2] ? 2 : 0;
@@ -794,6 +804,7 @@ export class PokerGameEngine {
       turnStartPot: this.turnStartPot,
       turnStartPlayerChips: this.turnStartPlayerChips,
       turnStartPlayerContribution: this.turnStartPlayerContribution,
+      turnStartPlayerRank: this.turnStartPlayerRank,
       turnStartOpponents: this.turnStartOpponents,
       turnEvents: this.turnEvents,
       playerChips: this.playerChips,
@@ -861,6 +872,7 @@ export class PokerGameEngine {
       shortName: opp.profile.shortName,
       streetName: STREETS[this.streetIndex]?.name ?? 'Showdown',
       boardSnapshot: this.board.map(cardToData),
+      playerRankSnapshot: this.computePlayerHandRank(this.playerCards, this.board),
       thinkingSpeech: this.pickThinkingLine(opp),
       action,
       ...(amount !== undefined ? { amount } : {}),

@@ -1652,6 +1652,80 @@ test('PokerGameEngine finishShowdown explains equal-category wins (higher rank &
   assert.deepEqual(diffBoardState.outcome?.winningBestFiveCards, ['A♣', 'K♦', 'Q♥', '8♥', '6♠']);
 });
 
+test('PokerGameEngine snapshots turnStartPlayerRank and per-event playerRankSnapshot for playback', () => {
+  let handIdx = 0;
+  const deckFactory = () => {
+    handIdx += 1;
+    if (handIdx === 1) {
+      const cards = [
+        new Card('♥', 'A'), new Card('♥', '2'), // Player: Straight on board
+        new Card('♣', '9'), new Card('♦', '8'),
+        new Card('♠', 'J'), new Card('♣', '6'),
+        new Card('♦', 'Q'), new Card('♣', '10'),
+        new Card('♠', '8'), new Card('♦', '7'),
+        new Card('♠', '3'), new Card('♦', '4'), new Card('♣', '5'), // Flop -> Straight!
+        new Card('♠', '9'), // Turn
+        new Card('♣', 'K'), // River
+      ];
+      return { draw: () => cards.shift()! };
+    }
+    const cards = [
+      new Card('♦', 'K'), new Card('♣', '7'), // Player: High Card K preflop -> One pair on flop -> Two pair on turn
+      new Card('♠', 'Q'), new Card('♦', '9'),
+      new Card('♥', 'J'), new Card('♣', '8'),
+      new Card('♠', '10'), new Card('♥', '9'),
+      new Card('♦', 'J'), new Card('♠', '8'),
+      new Card('♦', '7'), new Card('♣', '6'), new Card('♠', '4'), // Flop -> pairs 7 (One pair)
+      new Card('♠', 'K'), // Turn -> pairs K (Two pair)
+      new Card('♥', '2'), // River
+    ];
+    return { draw: () => cards.shift()! };
+  };
+
+  const engine = new PokerGameEngine({
+    initialButtonSeatIndex: 0,
+    random: () => 0.5,
+    deckFactory,
+  });
+  engine.act('select_opponents:reginald,buck,elon,tony');
+  engine.act('easy');
+  engine.act('call');
+  engine.act('check');
+  engine.act('check');
+  const h1End = engine.act('check');
+  assert.equal(h1End.playerCurrentRank, 'Straight');
+
+  // Hand 2: BTN rotates to seat 1 -> UTG (tony) acts before CO (Player)
+  const h2Start = engine.act('yes');
+  assert.equal(h2Start.handCount, 2);
+  assert.ok(h2Start.turnEvents.length > 0, 'Expected opening opponent turnEvents on Hand 2');
+  assert.equal(h2Start.turnStartPlayerRank, 'High Card K');
+  assert.equal(h2Start.turnEvents[0]?.playerRankSnapshot, 'High Card K');
+
+  // Call preflop -> SB & BB act preflop, then Flop deals (7♦ 6♣ 4♠) and Flop opponents act
+  const h2Flop = engine.act('call');
+  const preflopEvents = h2Flop.turnEvents.filter((e) => e.streetName === 'Pre-flop');
+  const flopEvents = h2Flop.turnEvents.filter((e) => e.streetName === 'Flop');
+  assert.ok(flopEvents.length > 0, 'Expected Flop turnEvents before player acts on Flop');
+  for (const ev of preflopEvents) {
+    assert.equal(ev.boardSnapshot.length, 0);
+    assert.equal(ev.playerRankSnapshot, 'High Card K');
+  }
+  for (const ev of flopEvents) {
+    assert.equal(ev.boardSnapshot.length, 3);
+    assert.equal(ev.playerRankSnapshot, 'One pair');
+  }
+
+  // Check Flop -> Turn deals K♠ -> Two pair during Turn opponent playback
+  const h2Turn = engine.act('check');
+  const turnEvents = h2Turn.turnEvents.filter((e) => e.streetName === 'Turn');
+  assert.ok(turnEvents.length > 0, 'Expected Turn turnEvents before player acts on Turn');
+  for (const ev of turnEvents) {
+    assert.equal(ev.boardSnapshot.length, 4);
+    assert.equal(ev.playerRankSnapshot, 'Two pair');
+  }
+});
+
 test('PokerGameEngine narrates two-way, three-way, and five-way split pots accurately with consistent dealerSpeech and narrative', () => {
   // 1. Three-way tie: Player (A♥ 2♥), Elon (3♣ 2♣), Mei-Ling (2♠ 4♥) on board 3♠ 10♣ 5♦ A♠ 4♦ (all 3 make 5-high Straight)
   //    Seat 0 = You (BTN), Seat 1 = Reginald (SB -> folds $5 dead), Seat 2 = Mei-Ling (BB -> checks/ties),
@@ -1661,7 +1735,7 @@ test('PokerGameEngine narrates two-way, three-way, and five-way split pots accur
   const makeThreeWayStraightTieDeck = () => {
     const cards = [
       new Card('♥', 'A'), new Card('♥', '2'), // Player (BTN): 5-high Straight
-      new Card('♣', '2'), new Card('♦', '5'), // Seat 1: Reginald (SB -> weak 0.25 < 0.32, folds $5 dead)
+      new Card('♥', '3'), new Card('♣', '4'), // Seat 1: Reginald (SB -> weak 0.247 < 0.32, folds $5 dead)
       new Card('♠', '2'), new Card('♥', '4'), // Seat 2: Mei-Ling (BB -> checks preflop/postflop, 5-high Straight)
       new Card('♣', '3'), new Card('♣', '2'), // Seat 3: Elon (UTG -> calls preflop, 5-high Straight)
       new Card('♦', '2'), new Card('♠', '5'), // Seat 4: Buck (CO -> weak 0.25 < 0.32, folds)
