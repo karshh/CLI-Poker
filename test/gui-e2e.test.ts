@@ -3685,6 +3685,266 @@ test(
           },
         );
       });
+
+      // ----------------------------------------------------------------------
+      // TEST 20: Cinematic Opponent-Turn Camera Zoom In / Zoom Out Sequence
+      // ----------------------------------------------------------------------
+      await t.test('camera zooms into each thinking opponent, zooms out after each decision, resets on player turn, and snaps out on Skip', async () => {
+        await withGamePage(
+          async ({ page }) => {
+            await page.locator('.opponent-pick-card[data-opp-id="reginald"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="meiling"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="elon"]').click();
+            await page.locator('.opponent-pick-card[data-opp-id="buck"]').click();
+            await page.locator('#btn-confirm-opponents').click();
+            await waitForPromptReady(page, 'Choose table difficulty:');
+
+            // Resting camera before gameplay starts
+            const initialCam = await page.evaluate(() => {
+              const cam = document.getElementById('table-camera');
+              return {
+                state: cam?.dataset['cameraState'] || '',
+                zoom: Number(cam?.dataset['cameraZoom'] || '0'),
+                isZoomed: Boolean(cam?.classList.contains('is-zoomed')),
+              };
+            });
+            assert.equal(initialCam.state, 'idle');
+            assert.equal(initialCam.zoom, 1);
+            assert.equal(initialCam.isZoomed, false);
+
+            // Record every camera state transition during Hand 1 opening turns (UTG=elon, CO=buck -> You=BTN)
+            await page.evaluate(() => {
+              const log: Array<{ state: string; oppId: string; zoom: number; isZoomed: boolean; viewportZoomed: boolean }> = [];
+              (window as unknown as { __CAM_LOG__: typeof log }).__CAM_LOG__ = log;
+              const cam = document.getElementById('table-camera');
+              const vp = document.querySelector('.pov-viewport');
+              if (!cam) return;
+              const obs = new MutationObserver(() => {
+                const entry = {
+                  state: cam.dataset['cameraState'] || '',
+                  oppId: cam.dataset['focusedOppId'] || '',
+                  zoom: Number(cam.dataset['cameraZoom'] || '1'),
+                  isZoomed: cam.classList.contains('is-zoomed'),
+                  viewportZoomed: Boolean(vp?.classList.contains('camera-zoomed')),
+                };
+                const prev = log[log.length - 1];
+                if (!prev || prev.state !== entry.state || prev.oppId !== entry.oppId) {
+                  log.push(entry);
+                }
+              });
+              obs.observe(cam, { attributes: true, attributeFilter: ['data-camera-state', 'data-focused-opp-id', 'class'] });
+              (window as unknown as { __CAM_OBS__: MutationObserver }).__CAM_OBS__ = obs;
+            });
+
+            await page.locator('#action-buttons-group button', { hasText: 'Easy' }).click();
+
+            // Wait for first opponent (UTG Elon) to be zoomed in and verify framing stays within .pov-viewport
+            await page.waitForSelector('#table-camera.is-zoomed[data-focused-opp-id="elon"]', { timeout: 5000 });
+            await page.waitForTimeout(180); // let 0.25x camera transition settle (~120ms)
+            const zoomedFraming = await page.evaluate(() => {
+              const vp = document.querySelector('.pov-viewport')!.getBoundingClientRect();
+              const seat = document.querySelector('.character-container[data-opp-id="elon"]')!;
+              const nameplate = seat.querySelector('.character-nameplate')!.getBoundingClientRect();
+              const avatar = seat.querySelector('.opponent-avatar')!.getBoundingClientRect();
+              const cam = document.getElementById('table-camera')!;
+              return {
+                hasFocusedClass: seat.classList.contains('camera-focused'),
+                zoom: Number(cam.dataset['cameraZoom'] || '1'),
+                nameplateTop: nameplate.top,
+                nameplateLeft: nameplate.left,
+                nameplateRight: nameplate.right,
+                avatarBottom: avatar.bottom,
+                vpTop: vp.top,
+                vpLeft: vp.left,
+                vpRight: vp.right,
+                vpBottom: vp.bottom,
+              };
+            });
+            assert.equal(zoomedFraming.hasFocusedClass, true);
+            assert.ok(zoomedFraming.zoom > 1.15, `Expected zoom > 1.15, got ${zoomedFraming.zoom}`);
+            assert.ok(
+              zoomedFraming.nameplateTop >= zoomedFraming.vpTop - 2,
+              `Zoomed nameplate must stay inside viewport top (${zoomedFraming.nameplateTop} vs ${zoomedFraming.vpTop})`,
+            );
+            assert.ok(
+              zoomedFraming.nameplateLeft >= zoomedFraming.vpLeft - 2 &&
+                zoomedFraming.nameplateRight <= zoomedFraming.vpRight + 2,
+              `Zoomed nameplate must stay horizontally inside viewport`,
+            );
+            assert.ok(
+              zoomedFraming.avatarBottom <= zoomedFraming.vpBottom + 2,
+              `Zoomed avatar must stay inside viewport bottom`,
+            );
+
+            // Wait until it is the user's turn on Pre-flop
+            await waitForPromptReady(page, 'Pre-flop');
+
+            const { camLog, playerTurnCam } = await page.evaluate(() => {
+              const obs = (window as unknown as { __CAM_OBS__?: MutationObserver }).__CAM_OBS__;
+              if (obs) obs.disconnect();
+              const cam = document.getElementById('table-camera');
+              const vp = document.querySelector('.pov-viewport');
+              return {
+                camLog: (
+                  window as unknown as {
+                    __CAM_LOG__: Array<{ state: string; oppId: string; zoom: number; isZoomed: boolean; viewportZoomed: boolean }>;
+                  }
+                ).__CAM_LOG__,
+                playerTurnCam: {
+                  state: cam?.dataset['cameraState'] || '',
+                  oppId: cam?.dataset['focusedOppId'] || '',
+                  zoom: Number(cam?.dataset['cameraZoom'] || '0'),
+                  isZoomed: Boolean(cam?.classList.contains('is-zoomed')),
+                  viewportZoomed: Boolean(vp?.classList.contains('camera-zoomed')),
+                  focusedSeats: document.querySelectorAll('.character-container.camera-focused').length,
+                },
+              };
+            });
+
+            // Expect exact zoom-in -> zoom-out -> zoom-in -> zoom-out choreography: elon -> idle -> buck -> idle
+            const sequence = camLog.map((e) => (e.state === 'focused' ? `focus:${e.oppId}` : 'idle'));
+            assert.deepEqual(
+              sequence,
+              ['focus:elon', 'idle', 'focus:buck', 'idle'],
+              `Expected zoom-in/zoom-out cycle per opponent before player turn, saw: ${JSON.stringify(sequence)}`,
+            );
+            for (const entry of camLog) {
+              if (entry.state === 'focused') {
+                assert.ok(entry.zoom > 1.15);
+                assert.equal(entry.isZoomed, true);
+                assert.equal(entry.viewportZoomed, true);
+              } else {
+                assert.equal(entry.zoom, 1);
+                assert.equal(entry.isZoomed, false);
+                assert.equal(entry.viewportZoomed, false);
+              }
+            }
+            assert.deepEqual(playerTurnCam, {
+              state: 'idle',
+              oppId: '',
+              zoom: 1,
+              isZoomed: false,
+              viewportZoomed: false,
+              focusedSeats: 0,
+            });
+
+            // Now call pre-flop so SB Reginald & BB Mei-Ling act, and click Skip mid-zoom -> camera must snap cleanly to idle
+            await page.locator('#action-buttons-group button[data-choice-id="call"]').click();
+            await page.waitForSelector('#table-camera.is-zoomed', { timeout: 5000 });
+            await page.locator('#skip-playback-btn').click();
+            await waitForPromptReady(page, 'Flop');
+
+            const afterSkipCam = await page.evaluate(() => {
+              const cam = document.getElementById('table-camera');
+              const vp = document.querySelector('.pov-viewport');
+              return {
+                state: cam?.dataset['cameraState'] || '',
+                oppId: cam?.dataset['focusedOppId'] || '',
+                zoom: Number(cam?.dataset['cameraZoom'] || '0'),
+                isZoomed: Boolean(cam?.classList.contains('is-zoomed')),
+                viewportZoomed: Boolean(vp?.classList.contains('camera-zoomed')),
+                focusedSeats: document.querySelectorAll('.character-container.camera-focused').length,
+              };
+            });
+            assert.deepEqual(afterSkipCam, {
+              state: 'idle',
+              oppId: '',
+              zoom: 1,
+              isZoomed: false,
+              viewportZoomed: false,
+              focusedSeats: 0,
+            });
+
+            // Verify Zoom toggle button defaults to On, disables zooming & persists across reload, and can re-enable / cancel mid-turn
+            const zoomToggleBtn = page.locator('#camera-zoom-toggle-btn');
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: On');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'true');
+
+            await zoomToggleBtn.click();
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'false');
+            assert.equal(await zoomToggleBtn.getAttribute('data-zoom-enabled'), 'false');
+
+            // Reload and confirm Zoom: Off persists in localStorage
+            await page.reload({ waitUntil: 'networkidle' });
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'false');
+
+            // Observe camera while opponents act on the next street with Zoom disabled -> camera must NEVER zoom in
+            await page.evaluate(() => {
+              let sawZoom = false;
+              let sawThinking = false;
+              (window as unknown as { __DISABLED_ZOOM_CHECK__: () => { sawZoom: boolean; sawThinking: boolean } }).__DISABLED_ZOOM_CHECK__ =
+                () => ({ sawZoom, sawThinking });
+              const cam = document.getElementById('table-camera');
+              const scene = document.querySelector('.table-scene');
+              if (cam) {
+                new MutationObserver(() => {
+                  if (cam.classList.contains('is-zoomed') || cam.dataset['cameraState'] === 'focused') {
+                    sawZoom = true;
+                  }
+                }).observe(cam, { attributes: true, attributeFilter: ['class', 'data-camera-state'] });
+              }
+              if (scene) {
+                new MutationObserver(() => {
+                  if (document.querySelector('.character-container.is-thinking')) {
+                    sawThinking = true;
+                  }
+                }).observe(scene, { attributes: true, subtree: true, attributeFilter: ['class'] });
+              }
+            });
+
+            const flopCheck = page.locator('#action-buttons-group button[data-choice-id="check"]');
+            const flopCall = page.locator('#action-buttons-group button[data-choice-id="call"]');
+            if ((await flopCheck.count()) > 0) {
+              await flopCheck.click();
+            } else {
+              await flopCall.click();
+            }
+            await waitForPromptReady(page, 'Turn');
+
+            const disabledResult = await page.evaluate(() =>
+              (
+                window as unknown as { __DISABLED_ZOOM_CHECK__: () => { sawZoom: boolean; sawThinking: boolean } }
+              ).__DISABLED_ZOOM_CHECK__(),
+            );
+            assert.equal(disabledResult.sawThinking, true, 'Expected opponent turns to play while Zoom is Off');
+            assert.equal(disabledResult.sawZoom, false, 'Camera must NOT zoom in while Zoom toggle is Off');
+
+            // Re-enable Zoom via keyboard shortcut Z, trigger River opponent playback, and disable Zoom MID-TURN -> must zoom right back out!
+            await page.keyboard.press('z');
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: On');
+            assert.equal(await zoomToggleBtn.getAttribute('aria-pressed'), 'true');
+
+            const turnCheck = page.locator('#action-buttons-group button[data-choice-id="check"]');
+            const turnCall = page.locator('#action-buttons-group button[data-choice-id="call"]');
+            if ((await turnCheck.count()) > 0) {
+              await turnCheck.click();
+            } else {
+              await turnCall.click();
+            }
+            await page.waitForSelector('#table-camera.is-zoomed', { timeout: 5000 });
+            await zoomToggleBtn.click();
+            assert.equal((await zoomToggleBtn.textContent())?.trim(), '🎥 Zoom: Off');
+            const midTurnDisabled = await page.evaluate(() => {
+              const cam = document.getElementById('table-camera');
+              return {
+                state: cam?.dataset['cameraState'] || '',
+                zoom: Number(cam?.dataset['cameraZoom'] || '0'),
+                isZoomed: Boolean(cam?.classList.contains('is-zoomed')),
+              };
+            });
+            assert.deepEqual(midTurnDisabled, { state: 'idle', zoom: 1, isZoomed: false });
+          },
+          {
+            turnSpeed: 0.25,
+            engineOptions: {
+              initialButtonSeatIndex: 0,
+              random: () => 0.5,
+            },
+          },
+        );
+      });
     } finally {
       await browser.close();
     }

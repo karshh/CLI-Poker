@@ -1063,6 +1063,7 @@
       skipPlaybackHadFocus = true;
     }
     skipCurrentPlayback = true;
+    resetCameraZoom({ immediate: true });
     if (typeof activeDelayCancel === 'function') {
       activeDelayCancel();
     }
@@ -1077,6 +1078,7 @@
   const elPotsToggleBtn = document.getElementById('pots-toggle-btn');
   const elPickOpponentsBtn = document.getElementById('pick-opponents-btn');
   const elSpeedToggleBtn = document.getElementById('speed-toggle-btn');
+  const elCameraZoomToggleBtn = document.getElementById('camera-zoom-toggle-btn');
   const elSkipPlaybackBtn = document.getElementById('skip-playback-btn');
 
   // Hidable Table Pots Window Elements
@@ -1130,6 +1132,191 @@
   const elHistoryDrawer = document.getElementById('history-drawer');
   const elDrawerClose = document.getElementById('drawer-close');
   const elDrawerContent = document.getElementById('drawer-content');
+
+  // Cinematic Opponent-Turn Camera Rig Elements & State
+  const CAMERA_ZOOM_STORAGE_KEY = 'high_roller_camera_zoom';
+  const elPovViewport = document.querySelector('.pov-viewport');
+  const elPovPerspective = document.querySelector('.pov-perspective-container');
+  const elTableCamera = document.getElementById('table-camera');
+  const elTableScene = document.querySelector('.table-scene');
+  const elPlayerPovArea = document.querySelector('.player-pov-area');
+  let tableBaseScale = 1;
+  let cameraFocusedOppId = null;
+  let activeThinkingOppId = null;
+
+  function readSavedCameraZoomPreference() {
+    try {
+      const saved = window.localStorage ? window.localStorage.getItem(CAMERA_ZOOM_STORAGE_KEY) : null;
+      if (saved === 'false') return false;
+      if (saved === 'true') return true;
+    } catch {
+      // Ignore blocked storage
+    }
+    return true;
+  }
+
+  function writeSavedCameraZoomPreference(enabled) {
+    try {
+      if (window.localStorage) {
+        window.localStorage.setItem(CAMERA_ZOOM_STORAGE_KEY, String(Boolean(enabled)));
+      }
+    } catch {
+      // Ignore blocked storage
+    }
+  }
+
+  let cameraZoomEnabled = readSavedCameraZoomPreference();
+
+  function syncCameraZoomToggleUI(enabled) {
+    const isEnabled = Boolean(enabled);
+    if (!elCameraZoomToggleBtn) return;
+    elCameraZoomToggleBtn.textContent = isEnabled ? '🎥 Zoom: On' : '🎥 Zoom: Off';
+    elCameraZoomToggleBtn.setAttribute('aria-pressed', String(isEnabled));
+    elCameraZoomToggleBtn.dataset.zoomEnabled = String(isEnabled);
+    elCameraZoomToggleBtn.classList.toggle('active', isEnabled);
+    elCameraZoomToggleBtn.title = isEnabled
+      ? 'Disable opponent turn camera zoom (Z)'
+      : 'Enable opponent turn camera zoom (Z)';
+  }
+
+  function setCameraZoomEnabled(enabled) {
+    cameraZoomEnabled = Boolean(enabled);
+    writeSavedCameraZoomPreference(cameraZoomEnabled);
+    syncCameraZoomToggleUI(cameraZoomEnabled);
+    if (!cameraZoomEnabled) {
+      resetCameraZoom();
+    } else if (isPlayingTurns && activeThinkingOppId && !skipCurrentPlayback) {
+      focusCameraOnOpponent(activeThinkingOppId);
+    }
+    return cameraZoomEnabled;
+  }
+
+  syncCameraZoomToggleUI(cameraZoomEnabled);
+  if (elCameraZoomToggleBtn) {
+    elCameraZoomToggleBtn.addEventListener('click', () => {
+      ensureAudio();
+      setCameraZoomEnabled(!cameraZoomEnabled);
+    });
+  }
+
+  function getCameraTransitionMs(baseMs, immediate = false) {
+    if (immediate || skipCurrentPlayback) return 0;
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return 0;
+    }
+    const speed = getTurnSpeedMultiplier();
+    if (speed <= 0) return 0;
+    return Math.max(0, Math.round(baseMs * speed));
+  }
+
+  function applyCameraDuration(durationMs) {
+    const cssVal = `${durationMs}ms`;
+    if (elTableCamera) {
+      elTableCamera.style.setProperty('--camera-zoom-duration', cssVal);
+      elTableCamera.classList.toggle('camera-instant', durationMs <= 0);
+    }
+    if (elPovViewport) {
+      elPovViewport.style.setProperty('--camera-zoom-duration', cssVal);
+    }
+  }
+
+  function clearFocusedSeatClasses() {
+    document.querySelectorAll('.character-container.camera-focused').forEach((el) => {
+      el.classList.remove('camera-focused');
+    });
+  }
+
+  function focusCameraOnOpponent(oppId, options = {}) {
+    if (!cameraZoomEnabled) return;
+    if (!elPovViewport || !elPovPerspective || !elTableCamera || !elTableScene) return;
+    const seatEl = findSeatContainerByOppId(oppId);
+    if (!seatEl) return;
+
+    const vpRect = elPovViewport.getBoundingClientRect();
+    const perspRect = elPovPerspective.getBoundingClientRect();
+    if (vpRect.width <= 0 || vpRect.height <= 0) return;
+
+    const durationMs = getCameraTransitionMs(480, Boolean(options.immediate));
+    applyCameraDuration(durationMs);
+
+    // Measure untransformed center of .table-camera in .pov-viewport coordinates
+    const camCx = perspRect.left - vpRect.left + elTableCamera.offsetLeft + elTableCamera.offsetWidth / 2;
+    const camCy = perspRect.top - vpRect.top + elTableCamera.offsetTop + elTableCamera.offsetHeight / 2;
+
+    // Measure target opponent (overhead nameplate + speech bubble + avatar + chair) in .table-scene local coords
+    const overheadEl = seatEl.querySelector('.seat-overhead-stack');
+    const overheadH = Math.max(104, overheadEl ? overheadEl.offsetHeight : 112);
+    const localTop = seatEl.offsetTop - 12 - overheadH;
+    const localBottom = seatEl.offsetTop + Math.max(146, seatEl.offsetHeight) + 18;
+    const localSubjectH = Math.max(220, localBottom - localTop);
+    const localSubjectW = Math.max(210, seatEl.offsetWidth + 72);
+    const localCenterX = seatEl.offsetLeft; // horizontal center because seats use transform: translateX(-50%)
+    const localCenterY = (localTop + localBottom) / 2;
+
+    const sceneCenterX = elTableScene.offsetWidth / 2;
+    const sceneCenterY = elTableScene.offsetHeight / 2;
+    const dx = (localCenterX - sceneCenterX) * tableBaseScale;
+    const dy = (localCenterY - sceneCenterY) * tableBaseScale;
+
+    // Safe vertical band strictly between top nav and foreground player cards
+    const rawPlayerH = elPlayerPovArea ? elPlayerPovArea.getBoundingClientRect().height : 95;
+    const bottomReserve = Math.min(vpRect.height * 0.34, rawPlayerH) + 8;
+    const topPad = 12;
+    const availH = Math.max(110, vpRect.height - topPad - bottomReserve);
+    const availW = Math.max(180, vpRect.width - 28);
+
+    const baseSubjectW = localSubjectW * tableBaseScale;
+    const baseSubjectH = localSubjectH * tableBaseScale;
+    const maxZoom = vpRect.width < 660 ? 1.85 : 1.65;
+    const fitZoomH = baseSubjectH > 0 ? availH / baseSubjectH : maxZoom;
+    const fitZoomW = baseSubjectW > 0 ? availW / baseSubjectW : maxZoom;
+    const zoom = Math.max(1.18, Math.min(maxZoom, fitZoomH, fitZoomW));
+
+    const goalY = topPad + availH / 2;
+    let goalX = vpRect.width / 2;
+
+    // Keep zoomed opponent clear of an open Table Pots panel when viewport width allows
+    if (elPotsWindow && elPotsWindow.classList.contains('open')) {
+      const potsRect = elPotsWindow.getBoundingClientRect();
+      const potsRight = Math.max(0, potsRect.right - vpRect.left);
+      if (vpRect.width - potsRight >= 280) {
+        const halfZoomedW = (baseSubjectW * zoom) / 2;
+        const minClearX = potsRight + 14 + halfZoomedW;
+        const maxClearX = vpRect.width - 16 - halfZoomedW;
+        if (minClearX <= maxClearX) {
+          goalX = Math.min(maxClearX, Math.max(goalX, minClearX));
+        }
+      }
+    }
+
+    const tx = goalX - camCx - dx * zoom;
+    const ty = goalY - camCy - dy * zoom;
+
+    cameraFocusedOppId = oppId;
+    clearFocusedSeatClasses();
+    seatEl.classList.add('camera-focused');
+    elTableCamera.classList.add('is-zoomed');
+    elTableCamera.dataset.cameraState = 'focused';
+    elTableCamera.dataset.focusedOppId = oppId;
+    elTableCamera.dataset.cameraZoom = zoom.toFixed(2);
+    elTableCamera.style.transform = `translate3d(${tx.toFixed(1)}px, ${ty.toFixed(1)}px, 0px) scale(${zoom.toFixed(4)})`;
+    elPovViewport.classList.add('camera-zoomed');
+  }
+
+  function resetCameraZoom(options = {}) {
+    if (!elTableCamera || !elPovViewport) return;
+    const durationMs = getCameraTransitionMs(460, Boolean(options.immediate));
+    applyCameraDuration(durationMs);
+
+    cameraFocusedOppId = null;
+    clearFocusedSeatClasses();
+    elTableCamera.classList.remove('is-zoomed');
+    elTableCamera.dataset.cameraState = 'idle';
+    elTableCamera.dataset.focusedOppId = '';
+    elTableCamera.dataset.cameraZoom = '1';
+    elTableCamera.style.transform = 'translate3d(0px, 0px, 0px) scale(1)';
+    elPovViewport.classList.remove('camera-zoomed');
+  }
 
   function syncSoundToggleUI(muted) {
     const isMuted = Boolean(muted);
@@ -1250,6 +1437,9 @@
     if (elPotsToggleBtn) {
       elPotsToggleBtn.classList.toggle('active', shouldOpen);
     }
+    if (cameraFocusedOppId) {
+      focusCameraOnOpponent(cameraFocusedOppId);
+    }
   }
 
   if (elPotsToggleBtn) {
@@ -1275,6 +1465,7 @@
 
   function openOpponentDialog(allowCancel) {
     if (!elOppModalOverlay) return;
+    resetCameraZoom({ immediate: true });
     if (elBtnCancelOpps) {
       elBtnCancelOpps.hidden = !allowCancel;
     }
@@ -1966,6 +2157,7 @@
     if (!Array.isArray(events) || events.length === 0) {
       isPlayingTurns = false;
       skipCurrentPlayback = false;
+      resetCameraZoom({ immediate: true });
       if (elSkipPlaybackBtn) elSkipPlaybackBtn.hidden = true;
       isActionLocked = false;
       renderState(nextState);
@@ -2149,60 +2341,73 @@
         ? currentState.streetName
         : 'Pre-flop';
 
-    for (const event of events) {
-      if (event.streetName && lastRenderedStreet && event.streetName !== lastRenderedStreet) {
-        lastRenderedStreet = event.streetName;
-        // Clear old opponent speech bubbles for the new runout street
-        document.querySelectorAll('.opponent-bubble').forEach((b) => {
-          b.classList.remove('active', 'thinking');
-        });
-        elStreetBanner.textContent = event.streetName.toUpperCase();
-        elHudStreetStatus.textContent = `Street: ${event.streetName}`;
-        if (Array.isArray(event.boardSnapshot)) {
-          for (let i = 0; i < 5; i++) {
-            const slot = document.getElementById(`slot-${i}`);
-            const cardData = event.boardSnapshot[i];
-            if (slot && cardData) {
-              slot.innerHTML = renderCardHTML(cardData);
+    try {
+      for (const event of events) {
+        if (event.streetName && lastRenderedStreet && event.streetName !== lastRenderedStreet) {
+          resetCameraZoom({ immediate: skipCurrentPlayback });
+          lastRenderedStreet = event.streetName;
+          // Clear old opponent speech bubbles for the new runout street
+          document.querySelectorAll('.opponent-bubble').forEach((b) => {
+            b.classList.remove('active', 'thinking');
+          });
+          elStreetBanner.textContent = event.streetName.toUpperCase();
+          elHudStreetStatus.textContent = `Street: ${event.streetName}`;
+          if (Array.isArray(event.boardSnapshot)) {
+            for (let i = 0; i < 5; i++) {
+              const slot = document.getElementById(`slot-${i}`);
+              const cardData = event.boardSnapshot[i];
+              if (slot && cardData) {
+                slot.innerHTML = renderCardHTML(cardData);
+              }
+            }
+            if (!skipCurrentPlayback) {
+              sfx.playCardFlip();
             }
           }
-          if (!skipCurrentPlayback) {
-            sfx.playCardFlip();
+          if (typeof event.playerRankSnapshot === 'string' && event.playerRankSnapshot.length > 0) {
+            renderPlayerHandRank(event.playerRankSnapshot, null);
           }
+          elDealerBubbleText.textContent = `${event.streetName} dealt! Opponents contest the side pot...`;
+          elDealerBubble.classList.add('active');
+          elSpeakerName.textContent = 'DEALER';
+          elSpeakerThumb.textContent = SPEAKER_ICONS.Dealer;
+          elDialogueMainText.textContent = `${event.streetName} dealt — remaining opponents play for the side pot.`;
+          await delay(450);
         }
-        if (typeof event.playerRankSnapshot === 'string' && event.playerRankSnapshot.length > 0) {
-          renderPlayerHandRank(event.playerRankSnapshot, null);
-        }
-        elDealerBubbleText.textContent = `${event.streetName} dealt! Opponents contest the side pot...`;
-        elDealerBubble.classList.add('active');
-        elSpeakerName.textContent = 'DEALER';
-        elSpeakerThumb.textContent = SPEAKER_ICONS.Dealer;
-        elDialogueMainText.textContent = `${event.streetName} dealt — remaining opponents play for the side pot.`;
-        await delay(450);
-      }
 
-      setOpponentThinking(event);
-      if (livePots.opponents[event.opponentId]) {
-        livePots.opponents[event.opponentId].thinking = true;
+        setOpponentThinking(event);
+        activeThinkingOppId = event.opponentId;
+        if (livePots.opponents[event.opponentId]) {
+          livePots.opponents[event.opponentId].thinking = true;
+          renderPotsWindow(nextState, livePots);
+        }
+        if (!skipCurrentPlayback && cameraZoomEnabled) {
+          focusCameraOnOpponent(event.opponentId);
+        }
+
+        const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
+        await delay(thinkDurationMs);
+
+        activeThinkingOppId = null;
+        applyOpponentDecision(event, { suppressSfx: skipCurrentPlayback });
+        livePots.pot = event.potAfter;
+        const prevLiveOpp = livePots.opponents[event.opponentId];
+        livePots.opponents[event.opponentId] = {
+          chips: event.chipsAfter,
+          handContribution: event.handContributionAfter,
+          totalPotWon: prevLiveOpp ? prevLiveOpp.totalPotWon : 0,
+          folded: event.folded,
+          thinking: false,
+        };
         renderPotsWindow(nextState, livePots);
+
+        // Once the opponent decides, smoothly zoom back out to the full table before the next seat or player's turn
+        resetCameraZoom({ immediate: skipCurrentPlayback });
+        await delay(650);
       }
-
-      const thinkDurationMs = 1100 + Math.floor(Math.random() * 800); // 1.1s - 1.9s
-      await delay(thinkDurationMs);
-
-      applyOpponentDecision(event, { suppressSfx: skipCurrentPlayback });
-      livePots.pot = event.potAfter;
-      const prevLiveOpp = livePots.opponents[event.opponentId];
-      livePots.opponents[event.opponentId] = {
-        chips: event.chipsAfter,
-        handContribution: event.handContributionAfter,
-        totalPotWon: prevLiveOpp ? prevLiveOpp.totalPotWon : 0,
-        folded: event.folded,
-        thinking: false,
-      };
-      renderPotsWindow(nextState, livePots);
-
-      await delay(650);
+    } finally {
+      activeThinkingOppId = null;
+      resetCameraZoom({ immediate: true });
     }
 
     const wasSkipped = skipCurrentPlayback;
@@ -2267,6 +2472,9 @@
   function renderState(state, options = {}) {
     const prevState = currentState;
     currentState = state;
+    if (!isPlayingTurns) {
+      resetCameraZoom({ immediate: true });
+    }
     renderBettingRulesCue(state);
 
     if (elPickOpponentsBtn) {
@@ -2580,6 +2788,11 @@
       togglePotsWindow(undefined, { restoreFocus: true });
       return;
     }
+    if (key === 'z') {
+      ensureAudio();
+      setCameraZoomEnabled(!cameraZoomEnabled);
+      return;
+    }
     if (key === 's' && isPlayingTurns) {
       e.preventDefault();
       triggerSkipPlayback();
@@ -2594,9 +2807,6 @@
 
   // Dynamically fit the 3D table scene against BOTH available viewport width and height
   // (prevents clipping on narrow portrait phones AND short landscape viewports like 844x390)
-  const elPovViewport = document.querySelector('.pov-viewport');
-  const elTableScene = document.querySelector('.table-scene');
-
   function fitTableScene() {
     if (!elPovViewport || !elTableScene) return;
     const vpRect = elPovViewport.getBoundingClientRect();
@@ -2609,11 +2819,18 @@
     const scaleX = availW / 1140;
     const scaleY = availH / 700;
     const scale = Math.max(0.20, Math.min(1, scaleX, scaleY));
+    tableBaseScale = scale;
 
     // Shift downward proportionally so overhead nameplate + speech bubble above Dealer/Top seats stay well below top-nav
     const marginTop = Math.round(180 * scale);
     elTableScene.style.transform = `scale(${scale.toFixed(4)})`;
-    elTableScene.style.marginTop = `${marginTop}px`;
+    elTableScene.style.marginTop = '0px';
+    if (elTableCamera) {
+      elTableCamera.style.marginTop = `${marginTop}px`;
+    }
+    if (cameraFocusedOppId) {
+      focusCameraOnOpponent(cameraFocusedOppId, { immediate: true });
+    }
   }
 
   window.addEventListener('resize', fitTableScene);

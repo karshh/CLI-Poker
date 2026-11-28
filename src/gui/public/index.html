@@ -26,6 +26,9 @@
         <button id="speed-toggle-btn" class="nav-pill-btn" title="Cycle opponent playback speed (1x / 2x / 4x)">
           ⚡ Speed: 1x
         </button>
+        <button type="button" id="camera-zoom-toggle-btn" class="nav-pill-btn active" aria-pressed="true" data-zoom-enabled="true" title="Disable opponent turn camera zoom (Z)">
+          🎥 Zoom: On
+        </button>
         <div class="stat-pill" id="stat-hand-pill">Hand: <span id="stat-hand-count">1</span></div>
         <div class="stat-pill" id="stat-position-pill">Pos: <strong id="stat-position">BTN</strong></div>
         <div class="stat-pill" id="stat-mode-pill">Difficulty: <span id="stat-difficulty">-</span></div>
@@ -109,8 +112,11 @@
 
       <div class="pov-perspective-container">
 
-        <!-- UNIFIED TABLE & SEATED CHARACTERS SCENE -->
-        <div class="table-scene">
+        <!-- CINEMATIC TURN CAMERA RIG (Zooms into each thinking opponent, zooms out after decision) -->
+        <div class="table-camera" id="table-camera" data-camera-state="idle" data-camera-zoom="1">
+
+          <!-- UNIFIED TABLE & SEATED CHARACTERS SCENE -->
+          <div class="table-scene">
 
           <!-- DEALER (Seated in Chair Behind Center Back of Table) -->
           <div class="character-container dealer-slot" id="dealer-container">
@@ -261,7 +267,8 @@
             </div>
           </div>
 
-        </div><!-- /.table-scene -->
+          </div><!-- /.table-scene -->
+        </div><!-- /.table-camera -->
 
         <!-- PLAYER POV (Foreground: Cards in hand & Player Chips) -->
         <div class="player-pov-area">
